@@ -1,0 +1,141 @@
+# golangci-lint v2 configuration for pgedge-go-llm-lib.
+#
+# Run with `make lint` (which also runs gofmt-check and go vet).
+# Pin the binary version with `make lint-install`.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    # Bugs and correctness.
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Style and quality.
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - prealloc
+
+    # Security.
+    - gosec
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        # SSE writers — fmt.Fprintf to a ResponseWriter is best-effort.
+        - fmt.Fprintf
+        # `defer body.Close()` is the standard idiom; the close error is
+        # not actionable.
+        - (io.Closer).Close
+        - (net/http.ResponseWriter).Write
+
+    gosec:
+      excludes:
+        # G104 (errors not checked) overlaps with errcheck.
+        - G104
+
+    govet:
+      enable:
+        - shadow
+
+    staticcheck:
+      # Disable the "QF" quickfix family — these are style suggestions
+      # (e.g. "use a tagged switch" or "use fmt.Fprintf") rather than
+      # correctness issues, and the existing code is intentional.
+      checks:
+        - "all"
+        - "-QF1002"
+        - "-QF1003"
+        - "-QF1012"
+
+    misspell:
+      locale: UK
+      ignore-rules:
+        - color
+        - serialize
+        - serialization
+        - cancelled
+        - normalize
+        - normalized
+        - normalization
+        # HTTP / API vocabulary: real-world status messages and OpenAI's
+        # JSON field names use US spellings; reproducing them in tests
+        # is not a misspelling.
+        - unauthorized
+        - authorize
+        - authorized
+        - authorization
+
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+  exclusions:
+    rules:
+      # Test files: relax a few rules that produce noise without
+      # catching real bugs in test code.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - unparam
+          - revive
+          - bodyclose
+      # all.go does nothing but blank-import providers.
+      - path: llm/all/all\.go
+        linters:
+          - revive
+      # SSE streaming: the body is closed by the goroutine that owns
+      # the stream, which bodyclose can't track across the closure.
+      - path: 'llm/provider/(anthropic|gemini|ollama|openai)/(anthropic|gemini|ollama|openai)\.go'
+        linters:
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

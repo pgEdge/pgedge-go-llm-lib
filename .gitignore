@@ -1,0 +1,15 @@
+# Working files for Claude (planning artifacts, specs, memory,
+# per-user settings).  Nothing under .claude/ is intended to be
+# committed.
+.claude/
+
+# Go build artifacts
+coverage.out
+coverage.html
+*.test
+*.out
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
