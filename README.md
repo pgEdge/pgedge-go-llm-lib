@@ -1,5 +1,11 @@
 # pgEdge Go LLM Library
 
+[![CI - Build](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-build.yml/badge.svg)](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-build.yml)
+[![CI - Docs](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-docs.yml/badge.svg)](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-docs.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/pgEdge/pgedge-go-llm-lib.svg)](https://pkg.go.dev/github.com/pgEdge/pgedge-go-llm-lib)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pgEdge/pgedge-go-llm-lib)](https://goreportcard.com/report/github.com/pgEdge/pgedge-go-llm-lib)
+[![License](https://img.shields.io/badge/license-PostgreSQL-blue.svg)](LICENSE.md)
+
 pgEdge Go LLM Library is a unified Go interface for Anthropic, OpenAI,
 Gemini, and Ollama. It includes an HTTP proxy package, production-grade
 retry with exponential back-off, per-request timeouts, observability

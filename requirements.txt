@@ -1,0 +1,18 @@
+#-------------------------------------------------------------------------
+#
+# pgEdge Go LLM Library
+#
+# Copyright (c) 2025 - 2026, pgEdge, Inc.
+# This software is released under The PostgreSQL License
+#
+#-------------------------------------------------------------------------
+#
+# Pinned dependencies for the MkDocs site build (`make docs`,
+# `make docs-build`, and the ci-docs workflow).  Versions match the
+# wider pgEdge documentation toolchain so the site renders identically
+# across projects.
+
+mkdocs==1.6.1
+mkdocs-material==9.6.17
+mkdocs-material-extensions==1.3.1
+pymdown-extensions==10.16

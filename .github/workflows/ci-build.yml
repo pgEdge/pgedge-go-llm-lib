@@ -1,0 +1,116 @@
+name: CI - Build
+
+on:
+    push:
+        branches: [ main, master ]
+        paths:
+            - '**.go'
+            - 'go.mod'
+            - 'go.sum'
+            - 'Makefile'
+            - '.golangci.yml'
+            - '.github/workflows/ci-build.yml'
+    pull_request:
+        branches: [ main, master ]
+        paths:
+            - '**.go'
+            - 'go.mod'
+            - 'go.sum'
+            - 'Makefile'
+            - '.golangci.yml'
+            - '.github/workflows/ci-build.yml'
+    workflow_dispatch:
+
+concurrency:
+    group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+    cancel-in-progress: true
+
+jobs:
+    build:
+        name: Build (Go ${{ matrix.go-version }})
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                go-version: ['1.26.x']
+            fail-fast: false
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+            - name: Set up Go ${{ matrix.go-version }}
+              uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+              with:
+                  go-version: ${{ matrix.go-version }}
+                  cache: false
+
+            - name: Cache Go modules
+              uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+              with:
+                  path: |
+                      ~/go/pkg/mod
+                      ~/.cache/go-build
+                  key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('go.sum', 'go.mod') }}
+                  restore-keys: |
+                      ${{ runner.os }}-go-${{ matrix.go-version }}-
+
+            - name: Verify dependencies
+              run: go mod verify
+
+            - name: Download dependencies
+              run: go mod download
+
+            - name: Check formatting
+              run: make fmt-check
+
+            - name: Run go vet
+              run: make vet
+
+            - name: Install golangci-lint
+              run: |
+                  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+                  echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+            - name: Run linters
+              run: make lint
+
+            - name: Build all packages
+              run: make build
+
+            - name: Run tests with coverage
+              run: make coverage
+
+            - name: Verify per-file coverage threshold
+              run: |
+                  awk 'NR > 1 {
+                    split($1, a, ":")
+                    file = a[1]
+                    stmts = $2 + 0
+                    cov = $3 + 0
+                    total[file] += stmts
+                    if (cov > 0) covered[file] += stmts
+                  }
+                  END {
+                    fail = 0
+                    for (f in total) {
+                      pct = (covered[f] * 100.0) / total[f]
+                      printf "%6.2f%%  %s\n", pct, f
+                      if (pct < 90.0) {
+                        printf "  ✘ %s is below the 90%% per-file coverage target\n", f
+                        fail = 1
+                      }
+                    }
+                    exit fail
+                  }' coverage.out
+
+            - name: Generate aggregate coverage summary
+              run: go tool cover -func=coverage.out | tail -20
+
+            - name: Upload coverage artifact
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+              with:
+                  name: coverage
+                  path: |
+                      coverage.out
+                      coverage.html
+                  retention-days: 7
