@@ -52,6 +52,7 @@ a `Type` constant:
 |------------------------|------------------|
 | `llm.BlockText`        | `Text string`    |
 | `llm.BlockImage`       | `Image *ImageContent` |
+| `llm.BlockDocument`    | `Document *DocumentContent` |
 | `llm.BlockToolUse`     | `ToolUse *ToolUse` |
 | `llm.BlockToolResult`  | `ToolUseID`, `Text`, `IsError` |
 
@@ -68,6 +69,12 @@ llm.ToolResultMessage(id, result, false)        // tool + tool-result block
 llm.UserBlocks(
     llm.TextBlock("What is in this image?"),
     llm.ImageBlock(pngBytes, "image/png"),
+)
+
+// Document (PDF) input — Anthropic and Gemini only
+llm.UserBlocks(
+    llm.TextBlock("Summarise this PDF:"),
+    llm.DocumentBlock(pdfBytes, "application/pdf", "report.pdf"),
 )
 ```
 

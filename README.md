@@ -131,6 +131,7 @@ a `Type` constant that selects which payload field is populated:
 |----------------------|----------------|-------------------------------------|
 | `llm.BlockText`      | `"text"`       | `Text string`                       |
 | `llm.BlockImage`     | `"image"`      | `Image *ImageContent`               |
+| `llm.BlockDocument`  | `"document"`   | `Document *DocumentContent`         |
 | `llm.BlockToolUse`   | `"tool_use"`   | `ToolUse *ToolUse`                  |
 | `llm.BlockToolResult`| `"tool_result"`| `ToolUseID`, `Text`, `IsError`      |
 
@@ -156,6 +157,8 @@ llm.UserBlocks(
 llm.TextBlock("plain text")
 llm.ImageBlock(data, "image/jpeg")
 llm.ImageURLBlock("https://example.com/photo.jpg")
+llm.DocumentBlock(pdfBytes, "application/pdf", "report.pdf")
+llm.DocumentURLBlock("https://example.com/report.pdf", "application/pdf", "report.pdf")
 llm.ToolResultBlock(toolUseID, result, isError)
 ```
 
@@ -294,6 +297,38 @@ resp, err := client.Chat(ctx, llm.ChatRequest{
 For URL images use `llm.ImageURLBlock("https://...")`. Note: Anthropic and
 OpenAI support URL images; Gemini accepts file URIs; Ollama rejects
 URL-only images.
+
+## Documents (PDFs)
+
+Send a PDF (or other document type the provider supports) inline alongside
+text, without extracting the text yourself:
+
+```go
+pdf, _ := os.ReadFile("itinerary.pdf")
+
+resp, err := client.Chat(ctx, llm.ChatRequest{
+    Messages: []llm.Message{
+        llm.UserBlocks(
+            llm.TextBlock("Extract the flight legs from this confirmation:"),
+            llm.DocumentBlock(pdf, "application/pdf", "itinerary.pdf"),
+        ),
+    },
+})
+```
+
+For documents referenced by URL use `llm.DocumentURLBlock(url, mediaType,
+filename)`. Provider support:
+
+- **Anthropic** — native PDF support (base64 inline up to 32 MB / 100 pages,
+  or URL source). The PDF-beta header is enabled automatically.
+- **Gemini** — native, via inline base64 or file URI.
+- **OpenAI** — not supported by the Chat Completions API; the request is
+  rejected with `llm.ErrNotSupported` before any upstream call.
+- **Ollama** — not supported; the request is rejected with
+  `llm.ErrNotSupported`.
+
+For non-supporting providers, extract the text upstream of the call and pass
+it as a regular text block.
 
 ## Provider Extensions
 
@@ -522,12 +557,14 @@ proxy.Config{
 | Embeddings            | No        | Yes    | Yes    | Yes    |
 | Tool Calling          | Yes       | Yes    | Yes    | Yes*   |
 | Multimodal Images     | Yes       | Yes    | Yes    | No†    |
+| Documents (PDFs)      | Yes       | No‡    | Yes    | No‡    |
 | JSON Mode             | Yes       | Yes    | Yes    | Yes    |
 | Prompt Caching        | Yes       | No     | No     | No     |
 | Token Tracking        | Yes       | Yes    | Yes    | Yes    |
 
 \* Ollama tool calling is implemented via text-based parsing; results vary by model.  
-† Ollama rejects URL images; inline base64 may work with vision-capable models.
+† Ollama rejects URL images; inline base64 may work with vision-capable models.  
+‡ Request is rejected with `llm.ErrNotSupported`. Extract document text yourself before calling.
 
 ## Documentation
 

@@ -120,6 +120,25 @@ func (c *client) headers() map[string]string {
 	}
 }
 
+// rejectDocumentBlocks returns ErrNotSupported if any message in the
+// request carries a document content block. Ollama has no native
+// document (PDF) input path; the caller must pre-extract text or use
+// a provider with native document support (Anthropic, Gemini).
+func rejectDocumentBlocks(req llm.ChatRequest) error {
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == llm.BlockDocument {
+				return &llm.ProviderError{
+					Err:      llm.ErrNotSupported,
+					Message:  "Ollama does not support document content blocks; pre-extract text or use a provider with native document support (Anthropic, Gemini)",
+					Provider: providerName,
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // ---------- Chat ----------
 
 type ollamaChatRequest struct {
@@ -149,6 +168,9 @@ type ollamaRespMessage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if err := rejectDocumentBlocks(req); err != nil {
+		return nil, err
+	}
 	ollamaReq, err := c.buildChatRequest(req, false)
 	if err != nil {
 		return nil, err
@@ -492,6 +514,9 @@ func extractJSONFromText(text string) string {
 // ---------- ChatStream ----------
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+	if err := rejectDocumentBlocks(req); err != nil {
+		return nil, err
+	}
 	ollamaReq, err := c.buildChatRequest(req, true)
 	if err != nil {
 		return nil, err

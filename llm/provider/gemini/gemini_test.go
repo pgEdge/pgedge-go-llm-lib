@@ -823,6 +823,63 @@ func TestConvertMessage_BlockImageURL(t *testing.T) {
 	}
 }
 
+func TestConvertMessage_BlockDocumentInline(t *testing.T) {
+	m := llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockDocument, Document: &llm.DocumentContent{
+				Data:      []byte{0x25, 0x50, 0x44, 0x46},
+				MediaType: "application/pdf",
+				Filename:  "doc.pdf",
+			}},
+		},
+	}
+	contents := convertMessage(m, nil)
+	if len(contents) != 1 || len(contents[0].Parts) != 1 {
+		t.Fatalf("unexpected output: %+v", contents)
+	}
+	id := contents[0].Parts[0].InlineData
+	if id == nil || id.MimeType != "application/pdf" || len(id.Data) != 4 {
+		t.Errorf("inlineData = %+v", id)
+	}
+}
+
+func TestConvertMessage_BlockDocumentURL(t *testing.T) {
+	m := llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockDocument, Document: &llm.DocumentContent{
+				URL:       "gs://my-bucket/doc.pdf",
+				MediaType: "application/pdf",
+			}},
+		},
+	}
+	contents := convertMessage(m, nil)
+	fd := contents[0].Parts[0].FileData
+	if fd == nil || fd.FileURI != "gs://my-bucket/doc.pdf" || fd.MimeType != "application/pdf" {
+		t.Errorf("fileData = %+v", fd)
+	}
+}
+
+func TestConvertMessage_BlockDocumentNilSkipped(t *testing.T) {
+	m := llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockText, Text: "before"},
+			{Type: llm.BlockDocument, Document: nil},
+			{Type: llm.BlockText, Text: "after"},
+		},
+	}
+	contents := convertMessage(m, nil)
+	parts := contents[0].Parts
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts (nil document skipped), got %d", len(parts))
+	}
+	if parts[0].Text != "before" || parts[1].Text != "after" {
+		t.Errorf("unexpected parts: %+v", parts)
+	}
+}
+
 func TestConvertMessage_AssistantTextOnly(t *testing.T) {
 	m := llm.Message{
 		Role: llm.RoleAssistant,

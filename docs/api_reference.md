@@ -184,6 +184,8 @@ constructors to build common message shapes:
 | `ToolResultMessage(id, text string, isError bool) Message` | Tool-role message with one tool-result block. |
 | `UserBlocks(blocks ...ContentBlock) Message`   | User message with arbitrary blocks. |
 | `AssistantBlocks(blocks ...ContentBlock) Message` | Assistant message with arbitrary blocks. |
+| `DocumentBlock(data []byte, mediaType, filename string) ContentBlock` | Document block with inline base64 data. |
+| `DocumentURLBlock(url, mediaType, filename string) ContentBlock` | Document block referenced by URL. |
 
 ---
 
@@ -209,6 +211,7 @@ type ContentBlock struct {
     Type         ContentBlockType `json:"type"`
     Text         string           `json:"text,omitempty"`
     Image        *ImageContent    `json:"image,omitempty"`
+    Document     *DocumentContent `json:"document,omitempty"`
     ToolUse      *ToolUse         `json:"tool_use,omitempty"`
     ToolUseID    string           `json:"tool_use_id,omitempty"`
     IsError      bool             `json:"is_error,omitempty"`
@@ -222,6 +225,7 @@ type ContentBlock struct {
 |------------------------|-----------------|------------------|
 | `llm.BlockText`        | `"text"`        | `Text` |
 | `llm.BlockImage`       | `"image"`       | `Image` |
+| `llm.BlockDocument`    | `"document"`    | `Document` |
 | `llm.BlockToolUse`     | `"tool_use"`    | `ToolUse` |
 | `llm.BlockToolResult`  | `"tool_result"` | `ToolUseID`, `Text`, `IsError` |
 
@@ -233,6 +237,8 @@ Block shorthand constructors:
 TextBlock(t string) ContentBlock
 ImageBlock(data []byte, mediaType string) ContentBlock
 ImageURLBlock(url string) ContentBlock
+DocumentBlock(data []byte, mediaType, filename string) ContentBlock
+DocumentURLBlock(url, mediaType, filename string) ContentBlock
 ToolResultBlock(toolUseID, text string, isError bool) ContentBlock
 ```
 
@@ -251,6 +257,30 @@ type ImageContent struct {
 Set either `URL` or `Data`+`MediaType` (e.g. `"image/png"`).
 Anthropic and OpenAI support URL images; Gemini accepts file
 URIs; Ollama rejects URL-only images.
+
+---
+
+## DocumentContent
+
+```go
+type DocumentContent struct {
+    URL       string `json:"url,omitempty"`
+    Data      []byte `json:"data,omitempty"`
+    MediaType string `json:"media_type,omitempty"`
+    Filename  string `json:"filename,omitempty"`
+}
+```
+
+Set either `URL` or `Data`+`MediaType` (e.g. `"application/pdf"`).
+`Filename` is an optional label that some providers surface to the
+model (for Anthropic, this becomes the document's `title`).
+
+Provider support:
+
+- **Anthropic** — native PDF support, base64 or URL source.
+- **Gemini** — native inline document or file-URI document input.
+- **OpenAI** and **Ollama** — `Chat`/`ChatStream` return
+  `llm.ErrNotSupported` when a document block is in the request.
 
 ---
 

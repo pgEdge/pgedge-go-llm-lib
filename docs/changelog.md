@@ -46,11 +46,18 @@ project adheres to
   and JSON-schema constrained output.
 - `StopSequences` field on `ChatRequest` to terminate
   generation on matching strings.
-- `BlockText`, `BlockImage`, `BlockToolUse`, and
-  `BlockToolResult` content block types for unified message
+- `BlockText`, `BlockImage`, `BlockDocument`, `BlockToolUse`,
+  and `BlockToolResult` content block types for unified message
   content.
 - Multimodal image input via `ImageBlock` (inline base64) and
   `ImageURLBlock` (URL reference).
+- Document content blocks (`BlockDocument`, `DocumentContent`,
+  `DocumentBlock`, `DocumentURLBlock`) for passing PDFs and other
+  document formats directly to the model without Go-side text
+  extraction. Anthropic and Gemini support documents natively;
+  OpenAI and Ollama reject document blocks with
+  `llm.ErrNotSupported`. The Anthropic provider auto-enables the
+  PDF beta header.
 - Convenience constructors `UserText`, `AssistantText`,
   `SystemText`, `ToolResultMessage`, `UserBlocks`,
   `AssistantBlocks`, `TextBlock`, and `ToolResultBlock`.
