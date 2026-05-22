@@ -119,7 +119,7 @@ func (c *client) headers() map[string]string {
 	h := map[string]string{
 		"Content-Type":      "application/json",
 		"anthropic-version": "2023-06-01",
-		"anthropic-beta":    "prompt-caching-2024-07-31",
+		"anthropic-beta":    "prompt-caching-2024-07-31,pdfs-2024-09-25",
 	}
 	if c.apiKey != "" {
 		h["x-api-key"] = c.apiKey
@@ -205,6 +205,7 @@ type anthropicChatResponse struct {
 //
 //	"text"         -> Text
 //	"image"        -> Source
+//	"document"     -> Source, optional Title
 //	"tool_use"     -> ID, Name, Input
 //	"tool_result"  -> ToolUseID, Content, IsError
 type anthropicContentBlock struct {
@@ -214,8 +215,12 @@ type anthropicContentBlock struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 
-	// Image source — populated for "image".
-	Source *anthropicImageSource `json:"source,omitempty"`
+	// Source — populated for "image" and "document".
+	Source *anthropicSource `json:"source,omitempty"`
+
+	// Title — optional human-readable label populated for "document"
+	// (e.g., a filename surfaced to the model).
+	Title string `json:"title,omitempty"`
 
 	// Tool result — populated for "tool_result".
 	ToolUseID string `json:"tool_use_id,omitempty"`
@@ -226,7 +231,9 @@ type anthropicContentBlock struct {
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
-type anthropicImageSource struct {
+// anthropicSource is the wire representation of an image- or
+// document-block source on Anthropic's Messages API.
+type anthropicSource struct {
 	Type      string `json:"type"`                 // "base64" or "url"
 	MediaType string `json:"media_type,omitempty"` // for base64
 	Data      []byte `json:"data,omitempty"`       // for base64 (auto base64-encoded by encoding/json)
@@ -408,17 +415,33 @@ func convertBlock(b llm.ContentBlock) anthropicContentBlock {
 	case llm.BlockImage:
 		if b.Image != nil {
 			if b.Image.URL != "" {
-				out.Source = &anthropicImageSource{
+				out.Source = &anthropicSource{
 					Type: "url",
 					URL:  b.Image.URL,
 				}
 			} else {
-				out.Source = &anthropicImageSource{
+				out.Source = &anthropicSource{
 					Type:      "base64",
 					MediaType: b.Image.MediaType,
 					Data:      b.Image.Data,
 				}
 			}
+		}
+	case llm.BlockDocument:
+		if b.Document != nil {
+			if b.Document.URL != "" {
+				out.Source = &anthropicSource{
+					Type: "url",
+					URL:  b.Document.URL,
+				}
+			} else {
+				out.Source = &anthropicSource{
+					Type:      "base64",
+					MediaType: b.Document.MediaType,
+					Data:      b.Document.Data,
+				}
+			}
+			out.Title = b.Document.Filename
 		}
 	case llm.BlockToolUse:
 		if b.ToolUse != nil {

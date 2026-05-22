@@ -17,7 +17,8 @@
 // construct a client.
 //
 // The package surface includes streaming via Stream, tool calling via
-// Tool/ToolUse, multimodal images via ImageBlock/ImageURLBlock, JSON
+// Tool/ToolUse, multimodal images via ImageBlock/ImageURLBlock,
+// document input (e.g. PDFs) via DocumentBlock/DocumentURLBlock, JSON
 // mode via ResponseFormat, retries via RetryConfig, and observability
 // via OnRetry/Usage/Ping.
 package llm

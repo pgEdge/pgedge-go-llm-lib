@@ -419,6 +419,26 @@ func convertMessage(m llm.Message, toolNames map[string]string) []geminiContent 
 				})
 			}
 
+		case llm.BlockDocument:
+			if b.Document == nil {
+				continue
+			}
+			if b.Document.URL != "" {
+				parts = append(parts, geminiPart{
+					FileData: &geminiFileData{
+						MimeType: b.Document.MediaType,
+						FileURI:  b.Document.URL,
+					},
+				})
+			} else if len(b.Document.Data) > 0 {
+				parts = append(parts, geminiPart{
+					InlineData: &geminiInlineData{
+						MimeType: b.Document.MediaType,
+						Data:     b.Document.Data,
+					},
+				})
+			}
+
 		case llm.BlockToolUse:
 			if b.ToolUse == nil {
 				continue

@@ -32,6 +32,7 @@ type Message struct {
 //
 //	BlockText       -> Text
 //	BlockImage      -> Image
+//	BlockDocument   -> Document
 //	BlockToolUse    -> ToolUse
 //	BlockToolResult -> ToolUseID, Text, optional IsError
 //
@@ -45,6 +46,9 @@ type ContentBlock struct {
 
 	// Image — populated for BlockImage.
 	Image *ImageContent `json:"image,omitempty"`
+
+	// Document — populated for BlockDocument.
+	Document *DocumentContent `json:"document,omitempty"`
 
 	// ToolUse — populated for BlockToolUse.
 	ToolUse *ToolUse `json:"tool_use,omitempty"`
@@ -68,6 +72,23 @@ type ImageContent struct {
 	URL       string `json:"url,omitempty"`
 	Data      []byte `json:"data,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
+}
+
+// DocumentContent carries a document (e.g. PDF) in either URL form
+// (when the provider supports URL input) or as inline base64-encoded
+// data. Exactly one of URL or Data should be set. MediaType (e.g.,
+// "application/pdf") is required when Data is set. Filename is an
+// optional human-readable label that some providers surface to the
+// model (e.g., as the document's title).
+//
+// Provider support is uneven: Anthropic and Gemini accept documents
+// natively; OpenAI and Ollama return llm.ErrNotSupported when a
+// document block is included in the request.
+type DocumentContent struct {
+	URL       string `json:"url,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
 // ToolUse represents a tool/function call made by the LLM.
@@ -418,6 +439,38 @@ func ImageURLBlock(url string) ContentBlock {
 	}
 }
 
+// DocumentBlock returns a ContentBlock for a document (e.g. PDF) with
+// inline base64-encoded data. mediaType should be e.g. "application/pdf".
+// filename is an optional label; pass "" to omit it.
+//
+// Anthropic and Gemini support documents natively; OpenAI and Ollama
+// return llm.ErrNotSupported when a document block is in the request.
+func DocumentBlock(data []byte, mediaType, filename string) ContentBlock {
+	return ContentBlock{
+		Type: BlockDocument,
+		Document: &DocumentContent{
+			Data:      data,
+			MediaType: mediaType,
+			Filename:  filename,
+		},
+	}
+}
+
+// DocumentURLBlock returns a ContentBlock for a document referenced by
+// URL. mediaType (e.g. "application/pdf") and filename are optional —
+// pass "" to omit either. Provider support for URL documents varies:
+// Anthropic accepts URL sources for PDFs; Gemini accepts file URIs.
+func DocumentURLBlock(url, mediaType, filename string) ContentBlock {
+	return ContentBlock{
+		Type: BlockDocument,
+		Document: &DocumentContent{
+			URL:       url,
+			MediaType: mediaType,
+			Filename:  filename,
+		},
+	}
+}
+
 // ToolResultBlock is a shorthand for a BlockToolResult ContentBlock.
 func ToolResultBlock(toolUseID, text string, isError bool) ContentBlock {
 	return ContentBlock{
@@ -466,6 +519,7 @@ type ContentBlockType string
 const (
 	BlockText       ContentBlockType = "text"
 	BlockImage      ContentBlockType = "image"
+	BlockDocument   ContentBlockType = "document"
 	BlockToolUse    ContentBlockType = "tool_use"
 	BlockToolResult ContentBlockType = "tool_result"
 )

@@ -285,6 +285,7 @@ func TestContentBlockTypeConstants(t *testing.T) {
 	}{
 		{BlockText, "text"},
 		{BlockImage, "image"},
+		{BlockDocument, "document"},
 		{BlockToolUse, "tool_use"},
 		{BlockToolResult, "tool_result"},
 	}
@@ -373,6 +374,67 @@ func TestImageBlockBase64(t *testing.T) {
 	}
 	if b.Image.URL != "" {
 		t.Errorf("URL = %q, want empty", b.Image.URL)
+	}
+}
+
+func TestDocumentBlock(t *testing.T) {
+	data := []byte("%PDF-1.4 fake")
+	b := DocumentBlock(data, "application/pdf", "itinerary.pdf")
+	if b.Type != BlockDocument || b.Document == nil {
+		t.Fatalf("got %+v", b)
+	}
+	if string(b.Document.Data) != "%PDF-1.4 fake" {
+		t.Errorf("data = %q", b.Document.Data)
+	}
+	if b.Document.MediaType != "application/pdf" {
+		t.Errorf("media_type = %q", b.Document.MediaType)
+	}
+	if b.Document.Filename != "itinerary.pdf" {
+		t.Errorf("filename = %q", b.Document.Filename)
+	}
+	if b.Document.URL != "" {
+		t.Errorf("URL = %q, want empty", b.Document.URL)
+	}
+}
+
+func TestDocumentURLBlock(t *testing.T) {
+	b := DocumentURLBlock("https://example.com/a.pdf", "application/pdf", "a.pdf")
+	if b.Type != BlockDocument || b.Document == nil {
+		t.Fatalf("got %+v", b)
+	}
+	if b.Document.URL != "https://example.com/a.pdf" {
+		t.Errorf("url = %q", b.Document.URL)
+	}
+	if b.Document.MediaType != "application/pdf" || b.Document.Filename != "a.pdf" {
+		t.Errorf("got %+v", b.Document)
+	}
+	if len(b.Document.Data) != 0 {
+		t.Errorf("Data should be empty for URL form, got %v", b.Document.Data)
+	}
+}
+
+func TestContentBlockDocumentRoundtrip(t *testing.T) {
+	b := ContentBlock{
+		Type: BlockDocument,
+		Document: &DocumentContent{
+			Data:      []byte{0x25, 0x50, 0x44, 0x46},
+			MediaType: "application/pdf",
+			Filename:  "x.pdf",
+		},
+	}
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"type":"document"`)) {
+		t.Errorf("missing type tag: %s", data)
+	}
+	var out ContentBlock
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Document == nil || out.Document.MediaType != "application/pdf" || out.Document.Filename != "x.pdf" {
+		t.Errorf("round-trip mismatch: %+v", out.Document)
 	}
 }
 

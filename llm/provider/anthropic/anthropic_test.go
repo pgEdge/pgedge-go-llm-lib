@@ -52,8 +52,12 @@ func TestChat(t *testing.T) {
 		if r.Header.Get("anthropic-version") != "2023-06-01" {
 			t.Errorf("expected anthropic-version 2023-06-01, got %s", r.Header.Get("anthropic-version"))
 		}
-		if r.Header.Get("anthropic-beta") != "prompt-caching-2024-07-31" {
-			t.Errorf("expected anthropic-beta prompt-caching-2024-07-31, got %s", r.Header.Get("anthropic-beta"))
+		beta := r.Header.Get("anthropic-beta")
+		if !strings.Contains(beta, "prompt-caching-2024-07-31") {
+			t.Errorf("anthropic-beta missing prompt-caching-2024-07-31: %s", beta)
+		}
+		if !strings.Contains(beta, "pdfs-2024-09-25") {
+			t.Errorf("anthropic-beta missing pdfs-2024-09-25: %s", beta)
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("expected application/json content type, got %s", r.Header.Get("Content-Type"))
@@ -694,6 +698,136 @@ func TestConvertBlock_ImageURL(t *testing.T) {
 	}
 	if out.Source.URL != "https://example.com/cat.png" {
 		t.Errorf("url = %q", out.Source.URL)
+	}
+}
+
+func TestConvertBlock_DocumentBase64(t *testing.T) {
+	out := convertBlock(llm.ContentBlock{
+		Type: llm.BlockDocument,
+		Document: &llm.DocumentContent{
+			Data:      []byte{0x25, 0x50, 0x44, 0x46},
+			MediaType: "application/pdf",
+			Filename:  "itinerary.pdf",
+		},
+	})
+	if out.Type != "document" {
+		t.Errorf("type = %q, want document", out.Type)
+	}
+	if out.Source == nil || out.Source.Type != "base64" {
+		t.Fatalf("expected base64 source, got %+v", out.Source)
+	}
+	if out.Source.MediaType != "application/pdf" {
+		t.Errorf("media_type = %q", out.Source.MediaType)
+	}
+	if len(out.Source.Data) != 4 {
+		t.Errorf("data not preserved: %v", out.Source.Data)
+	}
+	if out.Title != "itinerary.pdf" {
+		t.Errorf("title = %q, want itinerary.pdf", out.Title)
+	}
+}
+
+func TestConvertBlock_DocumentURL(t *testing.T) {
+	out := convertBlock(llm.ContentBlock{
+		Type: llm.BlockDocument,
+		Document: &llm.DocumentContent{
+			URL: "https://example.com/doc.pdf",
+		},
+	})
+	if out.Type != "document" {
+		t.Errorf("type = %q, want document", out.Type)
+	}
+	if out.Source == nil || out.Source.Type != "url" {
+		t.Fatalf("expected url source, got %+v", out.Source)
+	}
+	if out.Source.URL != "https://example.com/doc.pdf" {
+		t.Errorf("url = %q", out.Source.URL)
+	}
+	if out.Title != "" {
+		t.Errorf("title = %q, want empty", out.Title)
+	}
+}
+
+func TestConvertBlock_DocumentNilDropsSource(t *testing.T) {
+	out := convertBlock(llm.ContentBlock{Type: llm.BlockDocument, Document: nil})
+	if out.Type != "document" {
+		t.Errorf("type = %q, want document", out.Type)
+	}
+	if out.Source != nil {
+		t.Errorf("source should be nil for empty document, got %+v", out.Source)
+	}
+}
+
+func TestPDFBetaHeaderSent(t *testing.T) {
+	var gotBeta string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBeta = r.Header.Get("anthropic-beta")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{Messages: []llm.Message{llm.UserText("hi")}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if !strings.Contains(gotBeta, "pdfs-2024-09-25") {
+		t.Errorf("anthropic-beta header missing pdfs-2024-09-25: %q", gotBeta)
+	}
+	if !strings.Contains(gotBeta, "prompt-caching-2024-07-31") {
+		t.Errorf("anthropic-beta header missing prompt-caching-2024-07-31: %q", gotBeta)
+	}
+}
+
+func TestChatWithDocumentBlock(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			llm.UserBlocks(
+				llm.TextBlock("Summarise this PDF:"),
+				llm.DocumentBlock([]byte("%PDF-1.4"), "application/pdf", "doc.pdf"),
+			),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	msgs := captured["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	blocks := msgs[0].(map[string]any)["content"].([]any)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	}
+	docBlock := blocks[1].(map[string]any)
+	if docBlock["type"] != "document" {
+		t.Errorf("type = %v, want document", docBlock["type"])
+	}
+	if docBlock["title"] != "doc.pdf" {
+		t.Errorf("title = %v, want doc.pdf", docBlock["title"])
+	}
+	src := docBlock["source"].(map[string]any)
+	if src["type"] != "base64" {
+		t.Errorf("source.type = %v, want base64", src["type"])
+	}
+	if src["media_type"] != "application/pdf" {
+		t.Errorf("source.media_type = %v, want application/pdf", src["media_type"])
 	}
 }
 

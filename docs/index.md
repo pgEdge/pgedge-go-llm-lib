@@ -16,6 +16,7 @@ pgEdge Go LLM Library supports the following features:
 - text embeddings for supported providers.
 - tool and function calling with JSON schema definitions.
 - multimodal image input (inline base64 and URL).
+- document input (PDFs and other formats supported by the provider) inline or by URL.
 - JSON mode and JSON schema output constraints.
 - cumulative token usage tracking across requests; reset with `ResetUsage()`.
 - provider discovery: `RegisteredProviders()`, `Ping()`, `ListModelsWithMetadata()`.
@@ -38,12 +39,14 @@ Library supports and the features available for each provider:
 | Embeddings          | No        | Yes    | Yes    | Yes    |
 | Tool Calling        | Yes       | Yes    | Yes    | Yes*   |
 | Multimodal Images   | Yes       | Yes    | Yes    | No†    |
+| Documents (PDFs)    | Yes       | No‡    | Yes    | No‡    |
 | JSON Mode           | Yes       | Yes    | Yes    | Yes    |
 | Prompt Caching      | Yes       | No     | No     | No     |
 | Token Tracking      | Yes       | Yes    | Yes    | Yes    |
 
 \* Ollama tool calling is implemented via text-based parsing; results vary by model.  
-† Ollama rejects URL images; inline base64 may work with vision-capable models.
+† Ollama rejects URL images; inline base64 may work with vision-capable models.  
+‡ Request is rejected with `llm.ErrNotSupported`. Extract document text yourself before calling.
 
 ## How the Library Works
 

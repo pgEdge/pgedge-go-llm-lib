@@ -1230,3 +1230,51 @@ func TestNewClientPlumbsOnRetryHook(t *testing.T) {
 		t.Errorf("OnRetry StatusCode = %d, want %d", got.StatusCode, http.StatusServiceUnavailable)
 	}
 }
+
+// TestChatRejectsDocumentBlock verifies that a request carrying a
+// BlockDocument is rejected with ErrNotSupported before the Ollama
+// upstream is contacted.
+func TestChatRejectsDocumentBlock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Fatal("upstream must not be contacted when a document block is present")
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			llm.UserBlocks(
+				llm.TextBlock("Summarise:"),
+				llm.DocumentBlock([]byte("%PDF-1.4"), "application/pdf", "doc.pdf"),
+			),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got %v", err)
+	}
+}
+
+// TestChatStreamRejectsDocumentBlock mirrors TestChatRejectsDocumentBlock
+// for the streaming path.
+func TestChatStreamRejectsDocumentBlock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Fatal("upstream must not be contacted when a document block is present")
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+
+	_, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			llm.UserBlocks(llm.DocumentBlock([]byte("%PDF"), "application/pdf", "")),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got %v", err)
+	}
+}

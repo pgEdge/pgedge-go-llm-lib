@@ -126,6 +126,26 @@ func (c *client) headers() map[string]string {
 	return h
 }
 
+// rejectDocumentBlocks returns ErrNotSupported if any message in the
+// request carries a document content block. OpenAI's Chat Completions
+// API does not accept document inputs (PDF and similar) inline; the
+// caller must either pre-extract the text or use a provider that
+// natively supports document blocks (Anthropic, Gemini).
+func rejectDocumentBlocks(req llm.ChatRequest) error {
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == llm.BlockDocument {
+				return &llm.ProviderError{
+					Err:      llm.ErrNotSupported,
+					Message:  "OpenAI Chat Completions does not support document content blocks; pre-extract text or use a provider with native document support (Anthropic, Gemini)",
+					Provider: providerName,
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // useMaxCompletionTokens returns true for models that require
 // max_completion_tokens instead of max_tokens.
 func useMaxCompletionTokens(model string) bool {
@@ -232,6 +252,9 @@ type openaiUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if err := rejectDocumentBlocks(req); err != nil {
+		return nil, err
+	}
 	oaiReq := c.buildChatRequest(req, false)
 
 	var oaiResp openaiChatResponse
@@ -473,7 +496,7 @@ func convertAssistantMessage(m llm.Message) openaiMessage {
 // convertToolMessage emits one role:"tool" OpenAI message per
 // BlockToolResult in the input message.
 func convertToolMessage(m llm.Message) []openaiMessage {
-	var out []openaiMessage
+	out := make([]openaiMessage, 0, len(m.Content))
 	for _, b := range m.Content {
 		if b.Type != llm.BlockToolResult {
 			continue
@@ -572,6 +595,9 @@ type streamDeltaFunction struct {
 }
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+	if err := rejectDocumentBlocks(req); err != nil {
+		return nil, err
+	}
 	oaiReq := c.buildChatRequest(req, true)
 
 	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
