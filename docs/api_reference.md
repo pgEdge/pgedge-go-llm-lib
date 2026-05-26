@@ -612,3 +612,37 @@ not mutate them from inside a hook.
 
 See the README and [proxy godoc](https://pkg.go.dev/github.com/pgEdge/pgedge-go-llm-lib/llm/proxy)
 for `ErrorInfo`, `HealthResponse`, and the SSE wire format.
+
+---
+
+## Reranking and Multimodal Embeddings (v0.2+)
+
+### `Client.Rerank(ctx, RerankRequest) (*RerankResponse, error)`
+
+Reorders `Documents` by relevance to `Query`. Returns `ErrNotSupported`
+on providers that don't support reranking.
+
+### `Client.EmbedMultimodal(ctx, MultimodalEmbedRequest) ([][]float64, error)`
+
+Embeds inputs containing interleaved text and image content. Returns
+`ErrNotSupported` on providers that don't support multimodal embeddings.
+
+### `ListModels` capability filter
+
+`Client.ListModels` and `Client.ListModelsWithMetadata` accept zero or
+more `ListModelsOption` values. The only built-in option is
+`WithCapabilities(caps ...ModelCapability)`, which filters results to
+models whose `Capabilities` field contains every listed capability.
+
+### New `ModelCapability` constants
+
+- `ModelCapabilityMultimodalEmbeddings`
+- `ModelCapabilityReranking`
+
+### New types
+
+- `MultimodalContent`, `MultimodalContentType`, `MultimodalInput`,
+  `MultimodalEmbedRequest`
+- `RerankRequest`, `RerankResult`, `RerankResponse`
+- `ListModelsConfig`, `ListModelsOption`, `WithCapabilities`,
+  `FilterModelInfos`
