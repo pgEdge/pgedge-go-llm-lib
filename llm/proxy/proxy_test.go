@@ -1595,3 +1595,203 @@ func TestRerankBadRequest(t *testing.T) {
 		t.Fatalf("expected 400, got %d (body=%s)", rec.Code, rec.Body.String())
 	}
 }
+
+func newEmbedProxy(t *testing.T) http.Handler {
+	t.Helper()
+	setFake(&fakeProvider{embedVec: [][]float64{{0.1}}})
+	return proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	}).Handler()
+}
+
+func TestEmbedInvalidJSON(t *testing.T) {
+	h := newEmbedProxy(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed", bytes.NewReader([]byte(`{not json`)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestEmbedUnknownProvider(t *testing.T) {
+	h := newEmbedProxy(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed",
+		bytes.NewReader([]byte(`{"provider":"nope","input":["x"]}`)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestEmbedUpstreamError(t *testing.T) {
+	setFake(&fakeProvider{embedErr: errors.New("upstream boom")})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed",
+		bytes.NewReader([]byte(`{"provider":"fake","input":["x"]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rec.Code)
+	}
+}
+
+func TestEmbedRespectsModelOverride(t *testing.T) {
+	setFake(&fakeProvider{embedVec: [][]float64{{0.1}}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "default-model"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed",
+		bytes.NewReader([]byte(`{"provider":"fake","model":"override","input":["x"]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if got := fakeInstance.Model(); got != "override" {
+		t.Errorf("model = %q, want %q", got, "override")
+	}
+}
+
+func TestRerankInvalidJSON(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank", bytes.NewReader([]byte(`{not json`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestRerankUnknownProvider(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank",
+		bytes.NewReader([]byte(`{"provider":"nope","query":"q","documents":["a"]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestRerankUpstreamError(t *testing.T) {
+	setFake(&fakeProvider{rerankErr: errors.New("upstream boom")})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank",
+		bytes.NewReader([]byte(`{"provider":"fake","query":"q","documents":["a"]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rec.Code)
+	}
+}
+
+func TestEmbedMultimodalInvalidJSON(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal", bytes.NewReader([]byte(`{not json`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestEmbedMultimodalUnknownProvider(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal",
+		bytes.NewReader([]byte(`{"provider":"nope","inputs":[{"content":[{"type":"text","text":"hi"}]}]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestEmbedMultimodalBadBase64(t *testing.T) {
+	setFake(&fakeProvider{multimodalVec: [][]float64{{0.1}}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal",
+		bytes.NewReader([]byte(`{"provider":"fake","inputs":[{"content":[{"type":"image_base64","image_base64":"!!!not-base64!!!"}]}]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEmbedMultimodalOversizedBase64(t *testing.T) {
+	setFake(&fakeProvider{multimodalVec: [][]float64{{0.1}}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	// Build a base64 string whose decoded size exceeds 10 MiB. ~14 MiB of 'A'
+	// characters base64-decodes to ~10.5 MiB.
+	big := strings.Repeat("A", 14<<20)
+	body := fmt.Sprintf(`{"provider":"fake","inputs":[{"content":[{"type":"image_base64","image_base64":%q}]}]}`, big)
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for oversized image, got %d", rec.Code)
+	}
+}
+
+func TestEmbedMultimodalImageURLPath(t *testing.T) {
+	// Exercises the no-base64 branch in the content-type loop.
+	setFake(&fakeProvider{multimodalVec: [][]float64{{0.1}}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	body := `{"provider":"fake","inputs":[{"content":[{"type":"image_url","image_url":"https://example.com/x.jpg"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEmbedMultimodalUpstreamError(t *testing.T) {
+	setFake(&fakeProvider{multimodalErr: errors.New("upstream boom")})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal",
+		bytes.NewReader([]byte(`{"provider":"fake","inputs":[{"content":[{"type":"text","text":"hi"}]}]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rec.Code)
+	}
+}
