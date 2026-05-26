@@ -727,7 +727,9 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 
 	cfg := llm.ListModelsConfig{}
 	for _, opt := range opts {
-		opt(&cfg)
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 	return llm.FilterModelInfos(infos, cfg), nil
 }

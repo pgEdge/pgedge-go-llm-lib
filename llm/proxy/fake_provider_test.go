@@ -138,7 +138,9 @@ func (f *fakeProvider) ListModelsWithMetadata(_ context.Context, opts ...llm.Lis
 	}
 	var cfg llm.ListModelsConfig
 	for _, o := range opts {
-		o(&cfg)
+		if o != nil {
+			o(&cfg)
+		}
 	}
 	return llm.FilterModelInfos(infos, cfg), nil
 }

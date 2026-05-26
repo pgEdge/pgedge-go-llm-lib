@@ -181,7 +181,9 @@ func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) (
 func (c *client) ListModelsWithMetadata(_ context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
 	cfg := llm.ListModelsConfig{}
 	for _, opt := range opts {
-		opt(&cfg)
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 	return llm.FilterModelInfos(voyageCatalog(), cfg), nil
 }
