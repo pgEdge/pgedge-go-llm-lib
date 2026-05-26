@@ -11,7 +11,9 @@ package proxy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -89,8 +91,17 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var listOpts []llm.ListModelsOption
+	if caps := r.URL.Query()["capability"]; len(caps) > 0 {
+		typed := make([]llm.ModelCapability, 0, len(caps))
+		for _, c := range caps {
+			typed = append(typed, llm.ModelCapability(c))
+		}
+		listOpts = append(listOpts, llm.WithCapabilities(typed...))
+	}
+
 	if r.URL.Query().Get("metadata") == "true" {
-		models, mdErr := client.ListModelsWithMetadata(r.Context())
+		models, mdErr := client.ListModelsWithMetadata(r.Context(), listOpts...)
 		if mdErr != nil {
 			p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadGateway, Err: mdErr, RequestID: reqID})
 			return
@@ -102,7 +113,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	models, err := client.ListModels(r.Context())
+	models, err := client.ListModels(r.Context(), listOpts...)
 	if err != nil {
 		p.writeError(w, r, ErrorInfo{
 			Provider:   provider,
@@ -381,5 +392,213 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			Err:        streamErr,
 			RequestID:  reqID,
 		})
+	}
+}
+
+func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
+	r, reqID := p.ensureRequestID(r)
+	if reqID != "" {
+		w.Header().Set(p.requestIDHeaderName(), reqID)
+	}
+	if !p.authorize(w, r) {
+		return
+	}
+	var req EmbedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	if len(req.Input) == 0 {
+		p.writeError(w, r, ErrorInfo{
+			StatusCode: http.StatusBadRequest,
+			Err:        fmt.Errorf("input must contain at least one string"),
+			RequestID:  reqID,
+		})
+		return
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = p.cfg.DefaultProvider
+	}
+	opts, ok := p.cfg.Providers[provider]
+	if !ok {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest,
+			Err: fmt.Errorf("provider %q is not configured", provider), RequestID: reqID})
+		return
+	}
+	if req.Model != "" {
+		opts.Model = req.Model
+	}
+	client, err := llm.NewClient(provider, opts)
+	if err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+		return
+	}
+	vecs, err := client.EmbedBatch(r.Context(), req.Input)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, llm.ErrNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := encodeJSON(w, EmbedResponse{Embeddings: vecs}); err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+	}
+}
+
+func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
+	r, reqID := p.ensureRequestID(r)
+	if reqID != "" {
+		w.Header().Set(p.requestIDHeaderName(), reqID)
+	}
+	if !p.authorize(w, r) {
+		return
+	}
+	var req RerankRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	if req.Query == "" || len(req.Documents) == 0 {
+		p.writeError(w, r, ErrorInfo{
+			StatusCode: http.StatusBadRequest,
+			Err:        fmt.Errorf("query and documents are required"),
+			RequestID:  reqID,
+		})
+		return
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = p.cfg.DefaultProvider
+	}
+	opts, ok := p.cfg.Providers[provider]
+	if !ok {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest,
+			Err: fmt.Errorf("provider %q is not configured", provider), RequestID: reqID})
+		return
+	}
+	if req.Model != "" {
+		opts.Model = req.Model
+	}
+	client, err := llm.NewClient(provider, opts)
+	if err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+		return
+	}
+	libResp, err := client.Rerank(r.Context(), llm.RerankRequest{
+		Query: req.Query, Documents: req.Documents, TopK: req.TopK,
+	})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, llm.ErrNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		return
+	}
+	out := RerankResponse{Usage: RerankUsage{TotalTokens: libResp.Usage.TotalTokens}}
+	out.Results = make([]RerankResult, len(libResp.Results))
+	for i, res := range libResp.Results {
+		out.Results[i] = RerankResult{Index: res.Index, RelevanceScore: res.RelevanceScore, Document: res.Document}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := encodeJSON(w, out); err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+	}
+}
+
+const (
+	maxEmbedMultimodalBodyBytes = 16 << 20 // 16 MiB
+	maxDecodedImageBytes        = 10 << 20 // 10 MiB per image
+)
+
+func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
+	r, reqID := p.ensureRequestID(r)
+	if reqID != "" {
+		w.Header().Set(p.requestIDHeaderName(), reqID)
+	}
+	if !p.authorize(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxEmbedMultimodalBodyBytes)
+	var req EmbedMultimodalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	if len(req.Inputs) == 0 {
+		p.writeError(w, r, ErrorInfo{
+			StatusCode: http.StatusBadRequest,
+			Err:        fmt.Errorf("inputs must contain at least one item"),
+			RequestID:  reqID,
+		})
+		return
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = p.cfg.DefaultProvider
+	}
+	opts, ok := p.cfg.Providers[provider]
+	if !ok {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest,
+			Err: fmt.Errorf("provider %q is not configured", provider), RequestID: reqID})
+		return
+	}
+	if req.Model != "" {
+		opts.Model = req.Model
+	}
+	client, err := llm.NewClient(provider, opts)
+	if err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+		return
+	}
+	libReq := llm.MultimodalEmbedRequest{
+		Inputs: make([]llm.MultimodalInput, len(req.Inputs)),
+	}
+	for i, in := range req.Inputs {
+		contents := make([]llm.MultimodalContent, len(in.Content))
+		for j, c := range in.Content {
+			mc := llm.MultimodalContent{
+				Type:     llm.MultimodalContentType(c.Type),
+				Text:     c.Text,
+				ImageURL: c.ImageURL,
+				MIMEType: c.MIMEType,
+			}
+			if c.ImageBase64 != "" {
+				if base64.StdEncoding.DecodedLen(len(c.ImageBase64)) > maxDecodedImageBytes {
+					p.writeError(w, r, ErrorInfo{
+						Provider:   provider,
+						StatusCode: http.StatusBadRequest,
+						Err:        fmt.Errorf("image_base64 exceeds max decoded size"),
+						RequestID:  reqID,
+					})
+					return
+				}
+				data, decErr := base64.StdEncoding.DecodeString(c.ImageBase64)
+				if decErr != nil {
+					p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest, Err: decErr, RequestID: reqID})
+					return
+				}
+				mc.ImageData = data
+			}
+			contents[j] = mc
+		}
+		libReq.Inputs[i] = llm.MultimodalInput{Content: contents}
+	}
+	vecs, err := client.EmbedMultimodal(r.Context(), libReq)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, llm.ErrNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := encodeJSON(w, EmbedMultimodalResponse{Embeddings: vecs}); err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
 	}
 }

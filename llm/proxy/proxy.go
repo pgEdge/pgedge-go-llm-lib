@@ -210,11 +210,14 @@ func encodeJSON(w io.Writer, v any) error {
 // New creates a Proxy from the given Config. Call Handler on the
 // result to get the http.Handler that serves:
 //
-//	GET  /v1/health           — ping all configured providers
-//	GET  /v1/providers        — list configured providers
-//	GET  /v1/models           — list model names for a provider
-//	POST /v1/chat             — non-streaming chat completion
-//	POST /v1/chat/stream      — streaming chat (SSE)
+//	GET  /v1/health                — ping all configured providers
+//	GET  /v1/providers             — list configured providers
+//	GET  /v1/models                — list model names for a provider
+//	POST /v1/chat                  — non-streaming chat completion
+//	POST /v1/chat/stream           — streaming chat (SSE)
+//	POST /v1/embed                 — text embeddings (single or batch)
+//	POST /v1/embed/multimodal      — multimodal embeddings
+//	POST /v1/rerank                — rerank documents by relevance
 func New(cfg Config) *Proxy {
 	providers := make(map[string]llm.Options, len(cfg.Providers))
 	for k, v := range cfg.Providers {
@@ -235,6 +238,9 @@ func (p *Proxy) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/models", p.handleModels)
 	mux.HandleFunc("POST /v1/chat", p.handleChat)
 	mux.HandleFunc("POST /v1/chat/stream", p.handleChatStream)
+	mux.HandleFunc("POST /v1/embed", p.handleEmbed)
+	mux.HandleFunc("POST /v1/embed/multimodal", p.handleEmbedMultimodal)
+	mux.HandleFunc("POST /v1/rerank", p.handleRerank)
 	return mux
 }
 

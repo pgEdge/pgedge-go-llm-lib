@@ -714,30 +714,38 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 	return result, nil
 }
 
+// ---------- Rerank ----------
+
+func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Gemini does not support reranking",
+		Provider: "gemini",
+	}
+}
+
+// ---------- EmbedMultimodal ----------
+
+func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Gemini does not support multimodal embeddings",
+		Provider: "gemini",
+	}
+}
+
 // ---------- ListModels ----------
 
-func (c *client) ListModels(ctx context.Context) ([]string, error) {
-	url := fmt.Sprintf("%s/v1beta/models", c.baseURL)
-
-	var resp geminiModelsResponse
-	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
-		url, c.headers(), nil, &resp)
-	if err != nil && status == 0 {
+func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) ([]string, error) {
+	infos, err := c.ListModelsWithMetadata(ctx, opts...)
+	if err != nil {
 		return nil, err
 	}
-	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+	names := make([]string, len(infos))
+	for i, info := range infos {
+		names[i] = info.ID
 	}
-
-	var models []string
-	for _, m := range resp.Models {
-		if supportsGenerateContent(m.SupportedGenerationMethods) {
-			// Strip "models/" prefix.
-			name := strings.TrimPrefix(m.Name, "models/")
-			models = append(models, name)
-		}
-	}
-	return models, nil
+	return names, nil
 }
 
 func supportsGenerateContent(methods []string) bool {
@@ -759,16 +767,64 @@ var geminiModelCapabilities = map[string][]llm.ModelCapability{
 	"embedding-":       {llm.ModelCapabilityEmbeddings},
 }
 
-func (c *client) ListModelsWithMetadata(ctx context.Context) ([]llm.ModelInfo, error) {
-	names, err := c.ListModels(ctx)
-	if err != nil {
+func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
+	url := fmt.Sprintf("%s/v1beta/models", c.baseURL)
+
+	var resp geminiModelsResponse
+	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
+		url, c.headers(), nil, &resp)
+	if err != nil && status == 0 {
 		return nil, err
 	}
-	out := make([]llm.ModelInfo, len(names))
-	for i, name := range names {
-		out[i] = llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)}
+	if status < 200 || status >= 300 {
+		return nil, mapError(status, body)
 	}
-	return out, nil
+
+	cfg := llm.ListModelsConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	wantEmbeddings := false
+	for _, cap := range cfg.Capabilities {
+		if cap == llm.ModelCapabilityEmbeddings {
+			wantEmbeddings = true
+			break
+		}
+	}
+
+	var infos []llm.ModelInfo
+	for _, m := range resp.Models {
+		isEmbedding := geminiEmbeddingModel(m.SupportedGenerationMethods)
+		if isEmbedding {
+			// Embedding models are only included when the caller explicitly
+			// requests ModelCapabilityEmbeddings; they are excluded from the
+			// default (chat-focused) model list.
+			if wantEmbeddings {
+				name := strings.TrimPrefix(m.Name, "models/")
+				infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})
+			}
+		} else if supportsGenerateContent(m.SupportedGenerationMethods) {
+			// Strip "models/" prefix.
+			name := strings.TrimPrefix(m.Name, "models/")
+			infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})
+		}
+	}
+
+	return llm.FilterModelInfos(infos, cfg), nil
+}
+
+// geminiEmbeddingModel reports whether the model's supported methods indicate
+// it is an embedding model (not a chat/generation model).
+func geminiEmbeddingModel(methods []string) bool {
+	for _, m := range methods {
+		if m == "embedContent" || m == "batchEmbedContents" {
+			return true
+		}
+	}
+	return false
 }
 
 func lookupGeminiCapabilities(modelID string) []llm.ModelCapability {

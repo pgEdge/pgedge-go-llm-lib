@@ -67,13 +67,14 @@ func main() {
 }
 ```
 
-Import all four providers at once with `_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"`,
+Import all five providers at once with `_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"`,
 or import individual provider packages to keep binary size small:
 
 ```go
 import (
     _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/anthropic"
     _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+    _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
 )
 ```
 
@@ -387,7 +388,7 @@ dashboards and circuit breakers.
 
 ```go
 // List all registered providers (sorted)
-names := llm.RegisteredProviders() // []string{"anthropic","gemini","ollama","openai"}
+names := llm.RegisteredProviders() // []string{"anthropic","gemini","ollama","openai","voyage"}
 
 // Check connectivity
 if err := client.Ping(ctx); err != nil {
@@ -428,6 +429,10 @@ library.
 | `POST` | `/v1/chat`                         | Non-streaming chat (JSON response). |
 | `POST` | `/v1/chat/stream`                  | Streaming chat (SSE response). |
 | `GET`  | `/v1/health`                       | Ping all configured providers; 200 if all OK, 503 if any are down. |
+| `POST` | `/v1/embed`                        | Generate text embeddings for one or more inputs. |
+| `POST` | `/v1/embed/multimodal`             | Generate multimodal embeddings (text + images). |
+| `POST` | `/v1/rerank`                       | Rerank documents by relevance to a query. |
+| `GET`  | `/v1/models?...&capability=X`      | Filter models by capability (repeatable; AND of values). |
 
 ### Quick Start
 
@@ -550,17 +555,18 @@ proxy.Config{
 
 ## Supported Providers
 
-| Feature               | Anthropic | OpenAI | Gemini | Ollama |
-|-----------------------|-----------|--------|--------|--------|
-| Chat                  | Yes       | Yes    | Yes    | Yes    |
-| Streaming             | Yes       | Yes    | Yes    | Yes    |
-| Embeddings            | No        | Yes    | Yes    | Yes    |
-| Tool Calling          | Yes       | Yes    | Yes    | Yes*   |
-| Multimodal Images     | Yes       | Yes    | Yes    | No†    |
-| Documents (PDFs)      | Yes       | No‡    | Yes    | No‡    |
-| JSON Mode             | Yes       | Yes    | Yes    | Yes    |
-| Prompt Caching        | Yes       | No     | No     | No     |
-| Token Tracking        | Yes       | Yes    | Yes    | Yes    |
+| Feature               | Anthropic | OpenAI | Gemini | Ollama | Voyage |
+|-----------------------|-----------|--------|--------|--------|--------|
+| Chat                  | Yes       | Yes    | Yes    | Yes    | No     |
+| Streaming             | Yes       | Yes    | Yes    | Yes    | No     |
+| Embeddings            | No        | Yes    | Yes    | Yes    | Yes    |
+| Multimodal Embeddings | No        | No     | No     | No     | Yes    |
+| Reranking             | No        | No     | No     | No     | Yes    |
+| Tool Calling          | Yes       | Yes    | Yes    | Yes*   | No     |
+| Multimodal Images     | Yes       | Yes    | Yes    | No†    | (via multimodal embed) |
+| JSON Mode             | Yes       | Yes    | Yes    | Yes    | No     |
+| Prompt Caching        | Yes       | No     | No     | No     | No     |
+| Token Tracking        | Yes       | Yes    | Yes    | Yes    | Yes    |
 
 \* Ollama tool calling is implemented via text-based parsing; results vary by model.  
 † Ollama rejects URL images; inline base64 may work with vision-capable models.  

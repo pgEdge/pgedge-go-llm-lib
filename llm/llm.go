@@ -7,20 +7,30 @@
 //
 //-------------------------------------------------------------------------
 
-// Package llm provides a unified Go interface for chatting with
-// multiple large-language-model providers (Anthropic, OpenAI, Gemini,
-// and Ollama) through a single Client interface.
+// Package llm provides a unified Go interface to multiple
+// large-language-model and embedding/rerank providers (Anthropic,
+// OpenAI, Gemini, Ollama, Voyage) through a single Client interface.
 //
 // Provider packages register themselves at import time via init().
-// Import either the convenience package llm/all (for all four built-in
-// providers) or individual provider packages, then call NewClient to
-// construct a client.
+// Import the convenience package llm/all (for all five built-in
+// providers) or individual provider packages, then call NewClient.
 //
-// The package surface includes streaming via Stream, tool calling via
-// Tool/ToolUse, multimodal images via ImageBlock/ImageURLBlock,
-// document input (e.g. PDFs) via DocumentBlock/DocumentURLBlock, JSON
-// mode via ResponseFormat, retries via RetryConfig, and observability
-// via OnRetry/Usage/Ping.
+// The Client surface covers:
+//   - Chat and streaming chat (Chat, ChatStream)
+//   - Text embeddings (Embed, EmbedBatch)
+//   - Multimodal embeddings (EmbedMultimodal)
+//   - Reranking (Rerank)
+//   - Model discovery with capability filtering (ListModels,
+//     ListModelsWithMetadata, WithCapabilities)
+//   - Connectivity check (Ping) and token-usage tracking (Usage)
+//
+// Methods unsupported by a given provider return ErrNotSupported
+// (wrapped in *ProviderError) — e.g. Anthropic returns ErrNotSupported
+// from Embed, and Voyage returns ErrNotSupported from Chat.
+//
+// Per-request provider-specific options are passed via
+// ProviderExtension implementations (e.g. anthropic.Extension,
+// voyage.Extension) in the request's Extensions slice.
 package llm
 
 import (
@@ -31,7 +41,7 @@ import (
 )
 
 // Client is the unified interface for interacting with LLM providers.
-// All four built-in providers (Anthropic, OpenAI, Gemini, Ollama)
+// All five built-in providers (Anthropic, OpenAI, Gemini, Ollama, Voyage)
 // implement this interface.
 //
 // Create a Client with NewClient; import provider packages (or
@@ -57,16 +67,29 @@ type Client interface {
 	// embeddings.
 	EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
 
-	// ListModels returns the names of chat-capable models available
-	// from the provider. Each provider filters its list to relevant
-	// models only.
-	ListModels(ctx context.Context) ([]string, error)
+	// Rerank reorders a slice of documents by relevance to a query.
+	// Results are returned in descending RelevanceScore order. Returns
+	// ErrNotSupported for providers that do not support reranking
+	// (currently every provider except Voyage).
+	Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
+
+	// EmbedMultimodal generates embedding vectors for multimodal inputs
+	// (text and/or images). Returns ErrNotSupported for providers that
+	// do not support multimodal embeddings.
+	EmbedMultimodal(ctx context.Context, req MultimodalEmbedRequest) ([][]float64, error)
+
+	// ListModels returns the names of user-facing models available from
+	// the provider. With no options, providers return their default
+	// catalogue (typically chat models for chat-first providers, and
+	// embedding/rerank models for embedding-first providers). Pass
+	// WithCapabilities to filter by ModelCapability.
+	ListModels(ctx context.Context, opts ...ListModelsOption) ([]string, error)
 
 	// ListModelsWithMetadata returns ModelInfo for each available
 	// model, including context-window size, max output, capabilities,
 	// and deprecation status. Fields are best-effort; providers
 	// populate what their APIs expose.
-	ListModelsWithMetadata(ctx context.Context) ([]ModelInfo, error)
+	ListModelsWithMetadata(ctx context.Context, opts ...ListModelsOption) ([]ModelInfo, error)
 
 	// Ping checks provider connectivity with a lightweight request
 	// (typically a HEAD or models-list call). Returns nil if the
@@ -146,4 +169,41 @@ func NewClient(provider string, opts Options) (Client, error) {
 
 	opts = opts.WithDefaults()
 	return constructor(opts)
+}
+
+// FilterModelInfos applies a ListModelsConfig to a slice of ModelInfo.
+// It is a building block for provider implementations of ListModels /
+// ListModelsWithMetadata: providers fetch their full catalogue, then
+// call FilterModelInfos to apply caller-supplied options.
+//
+// Filtering is AND-of-capabilities: a model is kept only if its
+// Capabilities slice contains every value in cfg.Capabilities.
+// An empty cfg.Capabilities slice keeps every input.
+func FilterModelInfos(infos []ModelInfo, cfg ListModelsConfig) []ModelInfo {
+	if len(cfg.Capabilities) == 0 {
+		return infos
+	}
+	out := make([]ModelInfo, 0, len(infos))
+	for _, info := range infos {
+		if hasAllCapabilities(info.Capabilities, cfg.Capabilities) {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
+func hasAllCapabilities(have, want []ModelCapability) bool {
+	for _, w := range want {
+		found := false
+		for _, h := range have {
+			if h == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

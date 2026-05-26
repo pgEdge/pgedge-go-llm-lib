@@ -86,6 +86,77 @@ type ProviderHealth struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// EmbedRequest is the JSON body of POST /v1/embed. Input may contain
+// one or many strings; the proxy chooses Embed vs EmbedBatch
+// accordingly.
+type EmbedRequest struct {
+	Provider string   `json:"provider,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	Input    []string `json:"input"`
+}
+
+// EmbedResponse is the JSON body returned by POST /v1/embed.
+type EmbedResponse struct {
+	Embeddings [][]float64 `json:"embeddings"`
+}
+
+// MultimodalContentRequest describes one content item within a
+// multimodal embedding input. Type is required; the remaining fields
+// are type-dependent (text for "text", image_url / image_base64 /
+// mime_type for image types).
+type MultimodalContentRequest struct {
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	ImageBase64 string `json:"image_base64,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+}
+
+// MultimodalInputRequest is a single multimodal input to embed,
+// comprising one or more content items (text and/or image).
+type MultimodalInputRequest struct {
+	Content []MultimodalContentRequest `json:"content"`
+}
+
+// EmbedMultimodalRequest is the JSON body for POST /v1/embed/multimodal.
+type EmbedMultimodalRequest struct {
+	Provider string                   `json:"provider,omitempty"`
+	Model    string                   `json:"model,omitempty"`
+	Inputs   []MultimodalInputRequest `json:"inputs"`
+}
+
+// EmbedMultimodalResponse is the JSON body returned by POST /v1/embed/multimodal.
+type EmbedMultimodalResponse struct {
+	Embeddings [][]float64 `json:"embeddings"`
+}
+
+// RerankRequest is the JSON body for POST /v1/rerank.
+type RerankRequest struct {
+	Provider  string   `json:"provider,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+	TopK      *int     `json:"top_k,omitempty"`
+}
+
+// RerankResult is one ranked document within a RerankResponse.
+type RerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+	Document       string  `json:"document,omitempty"`
+}
+
+// RerankUsage carries token-usage information for a rerank call.
+type RerankUsage struct {
+	TotalTokens int `json:"total_tokens"`
+}
+
+// RerankResponse is the JSON body returned by POST /v1/rerank.
+type RerankResponse struct {
+	Results []RerankResult `json:"results"`
+	Usage   RerankUsage    `json:"usage"`
+}
+
 // ErrorResponse is the wire shape for any non-streaming error.
 type ErrorResponse struct {
 	Error string `json:"error"`

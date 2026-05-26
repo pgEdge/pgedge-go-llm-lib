@@ -17,10 +17,16 @@ LLM providers. All providers implement this interface.
 type Client interface {
     Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
     ChatStream(ctx context.Context, req ChatRequest) (*Stream, error)
+
     Embed(ctx context.Context, text string) ([]float64, error)
     EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
-    ListModels(ctx context.Context) ([]string, error)
-    ListModelsWithMetadata(ctx context.Context) ([]ModelInfo, error)
+
+    Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
+    EmbedMultimodal(ctx context.Context, req MultimodalEmbedRequest) ([][]float64, error)
+
+    ListModels(ctx context.Context, opts ...ListModelsOption) ([]string, error)
+    ListModelsWithMetadata(ctx context.Context, opts ...ListModelsOption) ([]ModelInfo, error)
+
     Ping(ctx context.Context) error
     Provider() string
     Model() string
@@ -35,6 +41,8 @@ type Client interface {
 | `ChatStream`             | Send a chat request and stream chunks. |
 | `Embed`                  | Generate an embedding for a text string. |
 | `EmbedBatch`             | Generate embeddings for multiple texts. |
+| `Rerank`                 | Reorder documents by relevance to a query. |
+| `EmbedMultimodal`        | Generate embeddings for multimodal (text + images) inputs. |
 | `ListModels`             | List available model names from the provider. |
 | `ListModelsWithMetadata` | List models with capability and limit metadata. |
 | `Ping`                   | Check provider connectivity (lightweight HEAD/GET). |
@@ -475,12 +483,14 @@ type ModelInfo struct {
 type ModelCapability string
 
 const (
-    ModelCapabilityChat       ModelCapability = "chat"
-    ModelCapabilityTools      ModelCapability = "tools"
-    ModelCapabilityVision     ModelCapability = "vision"
-    ModelCapabilityEmbeddings ModelCapability = "embeddings"
-    ModelCapabilityJSONMode   ModelCapability = "json_mode"
-    ModelCapabilityStreaming  ModelCapability = "streaming"
+    ModelCapabilityChat                 ModelCapability = "chat"
+    ModelCapabilityTools                ModelCapability = "tools"
+    ModelCapabilityVision               ModelCapability = "vision"
+    ModelCapabilityEmbeddings           ModelCapability = "embeddings"
+    ModelCapabilityJSONMode             ModelCapability = "json_mode"
+    ModelCapabilityStreaming            ModelCapability = "streaming"
+    ModelCapabilityMultimodalEmbeddings ModelCapability = "multimodal_embeddings"
+    ModelCapabilityReranking            ModelCapability = "reranking"
 )
 ```
 
@@ -612,3 +622,37 @@ not mutate them from inside a hook.
 
 See the README and [proxy godoc](https://pkg.go.dev/github.com/pgEdge/pgedge-go-llm-lib/llm/proxy)
 for `ErrorInfo`, `HealthResponse`, and the SSE wire format.
+
+---
+
+## Reranking and Multimodal Embeddings (v0.2+)
+
+### `Client.Rerank(ctx, RerankRequest) (*RerankResponse, error)`
+
+Reorders `Documents` by relevance to `Query`. Returns `ErrNotSupported`
+on providers that don't support reranking.
+
+### `Client.EmbedMultimodal(ctx, MultimodalEmbedRequest) ([][]float64, error)`
+
+Embeds inputs containing interleaved text and image content. Returns
+`ErrNotSupported` on providers that don't support multimodal embeddings.
+
+### `ListModels` capability filter
+
+`Client.ListModels` and `Client.ListModelsWithMetadata` accept zero or
+more `ListModelsOption` values. The only built-in option is
+`WithCapabilities(caps ...ModelCapability)`, which filters results to
+models whose `Capabilities` field contains every listed capability.
+
+### New `ModelCapability` constants
+
+- `ModelCapabilityMultimodalEmbeddings`
+- `ModelCapabilityReranking`
+
+### New types
+
+- `MultimodalContent`, `MultimodalContentType`, `MultimodalInput`,
+  `MultimodalEmbedRequest`
+- `RerankRequest`, `RerankResult`, `RerankResponse`
+- `ListModelsConfig`, `ListModelsOption`, `WithCapabilities`,
+  `FilterModelInfos`

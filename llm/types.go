@@ -550,10 +550,109 @@ type ModelCapability string
 
 // ModelCapability values reported by ListModelsWithMetadata.
 const (
-	ModelCapabilityChat       ModelCapability = "chat"
-	ModelCapabilityTools      ModelCapability = "tools"
-	ModelCapabilityVision     ModelCapability = "vision"
-	ModelCapabilityEmbeddings ModelCapability = "embeddings"
-	ModelCapabilityJSONMode   ModelCapability = "json_mode"
-	ModelCapabilityStreaming  ModelCapability = "streaming"
+	ModelCapabilityChat                 ModelCapability = "chat"
+	ModelCapabilityTools                ModelCapability = "tools"
+	ModelCapabilityVision               ModelCapability = "vision"
+	ModelCapabilityEmbeddings           ModelCapability = "embeddings"
+	ModelCapabilityJSONMode             ModelCapability = "json_mode"
+	ModelCapabilityStreaming            ModelCapability = "streaming"
+	ModelCapabilityMultimodalEmbeddings ModelCapability = "multimodal_embeddings"
+	ModelCapabilityReranking            ModelCapability = "reranking"
 )
+
+// MultimodalContentType identifies the kind of content in a
+// MultimodalContent value. The discriminator selects which of the
+// Text / ImageURL / ImageData fields is read; other fields are
+// ignored for that content item.
+type MultimodalContentType string
+
+const (
+	// MultimodalContentText is a UTF-8 text fragment in MultimodalContent.Text.
+	MultimodalContentText MultimodalContentType = "text"
+	// MultimodalContentImageURL is a remote image fetched from MultimodalContent.ImageURL.
+	MultimodalContentImageURL MultimodalContentType = "image_url"
+	// MultimodalContentImageData is an inline image in MultimodalContent.ImageData with MIME type in MultimodalContent.MIMEType.
+	MultimodalContentImageData MultimodalContentType = "image_base64"
+)
+
+// MultimodalContent is a single piece of content in a multimodal
+// embedding input. The Type field selects which of Text / ImageURL /
+// ImageData is read.
+type MultimodalContent struct {
+	Type      MultimodalContentType
+	Text      string
+	ImageURL  string
+	ImageData []byte
+	MIMEType  string
+}
+
+// MultimodalInput is one input to EmbedMultimodal. Each input
+// produces exactly one embedding vector; the order in
+// MultimodalEmbedRequest.Inputs is preserved in the returned slice.
+type MultimodalInput struct {
+	Content []MultimodalContent
+}
+
+// MultimodalEmbedRequest is the request body for Client.EmbedMultimodal.
+// Providers that do not support multimodal embeddings return ErrNotSupported.
+type MultimodalEmbedRequest struct {
+	Inputs     []MultimodalInput
+	Extensions []ProviderExtension
+}
+
+// RerankRequest is the request body for Client.Rerank. TopK, when
+// non-nil, asks the provider to return at most the top-K most-relevant
+// documents. Providers that do not support reranking return
+// ErrNotSupported.
+type RerankRequest struct {
+	Query      string
+	Documents  []string
+	TopK       *int
+	Extensions []ProviderExtension
+}
+
+// RerankResult is one row of a rerank response. Index is the position
+// in the original RerankRequest.Documents slice. RelevanceScore is the
+// provider's relevance value (typically [0,1] but not strictly bounded).
+// Document is non-empty only when the provider returns documents in
+// its response (e.g. when ReturnDocuments was requested via a provider
+// extension).
+type RerankResult struct {
+	Index          int
+	RelevanceScore float64
+	Document       string
+}
+
+// RerankResponse is the body returned by Client.Rerank. Results are
+// ordered by descending RelevanceScore. Usage carries token accounting
+// where the provider reports it; PromptTokens / CompletionTokens are
+// usually zero for rerank.
+type RerankResponse struct {
+	Results []RerankResult
+	Usage   TokenUsage
+}
+
+// ListModelsConfig is the configuration accumulated from ListModelsOption
+// values passed to Client.ListModels and Client.ListModelsWithMetadata.
+// Callers don't construct this directly; use options like WithCapabilities.
+type ListModelsConfig struct {
+	// Capabilities, when non-empty, restricts results to models whose
+	// ModelInfo.Capabilities contains EVERY listed capability. An
+	// empty Capabilities slice means "no filter".
+	Capabilities []ModelCapability
+}
+
+// ListModelsOption configures a single ListModels call. Pass values
+// returned by WithCapabilities (and future option constructors) as
+// the variadic argument to Client.ListModels.
+type ListModelsOption func(*ListModelsConfig)
+
+// WithCapabilities filters ListModels to models whose Capabilities
+// contain every listed value. Calls accumulate: passing two
+// WithCapabilities options is equivalent to one call with all
+// capabilities concatenated.
+func WithCapabilities(caps ...ModelCapability) ListModelsOption {
+	return func(c *ListModelsConfig) {
+		c.Capabilities = append(c.Capabilities, caps...)
+	}
+}

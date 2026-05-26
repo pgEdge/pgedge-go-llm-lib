@@ -277,21 +277,27 @@ func TestChatToolCallExtractionFromText(t *testing.T) {
 
 func TestListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("expected GET, got %s", r.Method)
-		}
-		if r.URL.Path != "/api/tags" {
-			t.Errorf("expected /api/tags, got %s", r.URL.Path)
-		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"models": []map[string]any{
-				{"name": "llama3:latest"},
-				{"name": "mistral:latest"},
-				{"name": "codellama:7b"},
-			},
-		})
+		switch r.URL.Path {
+		case "/api/tags":
+			if r.Method != http.MethodGet {
+				t.Errorf("expected GET for /api/tags, got %s", r.Method)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "llama3:latest"},
+					{"name": "mistral:latest"},
+					{"name": "codellama:7b"},
+				},
+			})
+		case "/api/show":
+			// Return completion capability so all models remain chat-capable.
+			json.NewEncoder(w).Encode(map[string]any{
+				"capabilities": []string{"completion"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer srv.Close()
 
@@ -1157,14 +1163,24 @@ func TestResetUsage(t *testing.T) {
 }
 
 func TestListModelsWithMetadata(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"models": []map[string]any{
-				{"name": "llama3:latest"},
-				{"name": "deepseek-r1:14b"},
-			},
-		})
+		switch r.URL.Path {
+		case "/api/tags":
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "llama3:latest"},
+					{"name": "deepseek-r1:14b"},
+				},
+			})
+		case "/api/show":
+			// Return completion capability so chat models retain Chat+Streaming.
+			json.NewEncoder(w).Encode(map[string]any{
+				"capabilities": []string{"completion"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer srv.Close()
 	c := newTestClient(t, srv.URL)
@@ -1178,6 +1194,66 @@ func TestListModelsWithMetadata(t *testing.T) {
 	for _, info := range infos {
 		if len(info.Capabilities) != 2 {
 			t.Errorf("ollama capabilities for %q = %v, want 2 entries", info.ID, info.Capabilities)
+		}
+	}
+}
+
+func TestListModelsCapabilityFilterEmbeddings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "llama3:latest"},
+					{"name": "nomic-embed-text:latest"},
+				},
+			})
+		case "/api/show":
+			// Inspect the request body to decide which capability set to return.
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]any
+			json.Unmarshal(body, &req)
+			modelName, _ := req["name"].(string)
+			if strings.Contains(modelName, "nomic-embed-text") {
+				json.NewEncoder(w).Encode(map[string]any{
+					"capabilities": []string{"embedding"},
+				})
+			} else {
+				json.NewEncoder(w).Encode(map[string]any{
+					"capabilities": []string{"completion"},
+				})
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	infos, err := c.ListModelsWithMetadata(context.Background(),
+		llm.WithCapabilities(llm.ModelCapabilityEmbeddings))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) == 0 {
+		t.Fatalf("expected at least one embedding model")
+	}
+	for _, info := range infos {
+		found := false
+		for _, cap := range info.Capabilities {
+			if cap == llm.ModelCapabilityEmbeddings {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("model %s missing embeddings capability", info.ID)
+		}
+		// Embedding-only models must NOT have chat/streaming capabilities.
+		for _, cap := range info.Capabilities {
+			if cap == llm.ModelCapabilityChat || cap == llm.ModelCapabilityStreaming {
+				t.Errorf("model %s should not have %s capability (embedding-only)", info.ID, cap)
+			}
 		}
 	}
 }
@@ -1276,5 +1352,29 @@ func TestChatStreamRejectsDocumentBlock(t *testing.T) {
 	}
 	if !errors.Is(err, llm.ErrNotSupported) {
 		t.Errorf("expected ErrNotSupported, got %v", err)
+	}
+}
+
+func TestRerankUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.Rerank(context.Background(), llm.RerankRequest{Query: "q", Documents: []string{"a"}})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}
+
+func TestEmbedMultimodalUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+			{Type: llm.MultimodalContentText, Text: "hi"},
+		}}},
+	})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("expected ErrNotSupported, got %v", err)
 	}
 }

@@ -78,6 +78,11 @@ jobs:
               run: make build
 
             - name: Run tests with coverage
+              env:
+                  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+                  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+                  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+                  VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
               run: make coverage
 
             - name: Verify per-file coverage threshold

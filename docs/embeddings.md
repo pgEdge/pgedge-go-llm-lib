@@ -9,12 +9,13 @@ clustering, classification, and retrieval-augmented generation.
 The following table describes embedding support across
 providers:
 
-| Provider  | Embed | EmbedBatch | Batch Method      |
-|-----------|-------|------------|-------------------|
-| OpenAI    | Yes   | Yes        | Native batch API  |
-| Gemini    | Yes   | Yes        | Sequential calls  |
-| Ollama    | Yes   | Yes        | Sequential calls  |
-| Anthropic | No    | No         | Not supported     |
+| Provider  | Embed | EmbedBatch | Multimodal Embeddings | Batch Method      |
+|-----------|-------|------------|-----------------------|-------------------|
+| OpenAI    | Yes   | Yes        | No                    | Native batch API  |
+| Gemini    | Yes   | Yes        | No                    | Sequential calls  |
+| Ollama    | Yes   | Yes        | No                    | Sequential calls  |
+| Anthropic | No    | No         | No                    | Not supported     |
+| Voyage    | Yes   | Yes        | Yes                   | Native batch API  |
 
 Calling `Embed` or `EmbedBatch` on the Anthropic provider
 returns an `ErrNotSupported` error.
@@ -115,6 +116,29 @@ if err != nil {
     }
 }
 ```
+
+## Multimodal Embeddings
+
+`Client.EmbedMultimodal` returns an embedding vector for each input,
+where each input may contain interleaved text and images. Today only
+Voyage (`voyage-multimodal-3`) implements this; other providers return
+`ErrNotSupported`.
+
+```go
+import "github.com/pgEdge/pgedge-go-llm-lib/llm"
+
+vecs, err := client.EmbedMultimodal(ctx, llm.MultimodalEmbedRequest{
+    Inputs: []llm.MultimodalInput{
+        {Content: []llm.MultimodalContent{
+            {Type: llm.MultimodalContentText, Text: "a photo of a kitten:"},
+            {Type: llm.MultimodalContentImageURL, ImageURL: "https://example.com/kitten.jpg"},
+        }},
+    },
+})
+```
+
+Use `client.ListModelsWithMetadata(ctx, llm.WithCapabilities(llm.ModelCapabilityMultimodalEmbeddings))`
+to discover models that support this method.
 
 ## Next Steps
 

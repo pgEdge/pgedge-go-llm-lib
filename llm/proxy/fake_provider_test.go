@@ -31,11 +31,18 @@ type fakeProvider struct {
 	mu            sync.RWMutex
 	model         string
 	models        []string
+	modelInfos    []llm.ModelInfo // when set, ListModelsWithMetadata returns these (ignoring models)
 	chatResp      *llm.ChatResponse
 	chatErr       error
 	streamFn      func(context.Context, llm.ChatRequest) (*llm.Stream, error)
-	listModelsErr error // when set, ListModels and ListModelsWithMetadata return this error
-	pingErr       error // when set, Ping returns this error
+	listModelsErr error               // when set, ListModels and ListModelsWithMetadata return this error
+	pingErr       error               // when set, Ping returns this error
+	embedVec      [][]float64         // when set, Embed/EmbedBatch return this
+	embedErr      error               // when set, Embed/EmbedBatch return this error
+	multimodalVec [][]float64         // when set, EmbedMultimodal returns this
+	multimodalErr error               // when set, EmbedMultimodal returns this error
+	rerankResp    *llm.RerankResponse // when set, Rerank returns this
+	rerankErr     error               // when set, Rerank returns this error
 }
 
 var (
@@ -82,13 +89,30 @@ func (f *fakeProvider) ChatStream(ctx context.Context, req llm.ChatRequest) (*ll
 	return nil, llm.ErrNotSupported
 }
 
-func (f *fakeProvider) Embed(context.Context, string) ([]float64, error) {
+func (f *fakeProvider) Embed(_ context.Context, text string) ([]float64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.embedErr != nil {
+		return nil, f.embedErr
+	}
+	if len(f.embedVec) > 0 {
+		return f.embedVec[0], nil
+	}
 	return nil, llm.ErrNotSupported
 }
-func (f *fakeProvider) EmbedBatch(context.Context, []string) ([][]float64, error) {
+
+func (f *fakeProvider) EmbedBatch(_ context.Context, _ []string) ([][]float64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.embedErr != nil {
+		return nil, f.embedErr
+	}
+	if f.embedVec != nil {
+		return f.embedVec, nil
+	}
 	return nil, llm.ErrNotSupported
 }
-func (f *fakeProvider) ListModels(context.Context) ([]string, error) {
+func (f *fakeProvider) ListModels(_ context.Context, _ ...llm.ListModelsOption) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.listModelsErr != nil {
@@ -97,17 +121,28 @@ func (f *fakeProvider) ListModels(context.Context) ([]string, error) {
 	return f.models, nil
 }
 
-func (f *fakeProvider) ListModelsWithMetadata(context.Context) ([]llm.ModelInfo, error) {
+func (f *fakeProvider) ListModelsWithMetadata(_ context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.listModelsErr != nil {
 		return nil, f.listModelsErr
 	}
-	out := make([]llm.ModelInfo, len(f.models))
-	for i, m := range f.models {
-		out[i] = llm.ModelInfo{ID: m, Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat}}
+	var infos []llm.ModelInfo
+	if len(f.modelInfos) > 0 {
+		infos = f.modelInfos
+	} else {
+		infos = make([]llm.ModelInfo, len(f.models))
+		for i, m := range f.models {
+			infos[i] = llm.ModelInfo{ID: m, Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat}}
+		}
 	}
-	return out, nil
+	var cfg llm.ListModelsConfig
+	for _, o := range opts {
+		if o != nil {
+			o(&cfg)
+		}
+	}
+	return llm.FilterModelInfos(infos, cfg), nil
 }
 func (f *fakeProvider) Provider() string { return "fake" }
 func (f *fakeProvider) Model() string {
@@ -127,4 +162,36 @@ func (f *fakeProvider) ResetUsage() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// fakeProvider doesn't track usage; nothing to reset.
+}
+
+func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.rerankErr != nil {
+		return nil, f.rerankErr
+	}
+	if f.rerankResp != nil {
+		return f.rerankResp, nil
+	}
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "fake does not support reranking",
+		Provider: "fake",
+	}
+}
+
+func (f *fakeProvider) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.multimodalErr != nil {
+		return nil, f.multimodalErr
+	}
+	if f.multimodalVec != nil {
+		return f.multimodalVec, nil
+	}
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "fake does not support multimodal embeddings",
+		Provider: "fake",
+	}
 }

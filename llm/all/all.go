@@ -21,4 +21,5 @@ import (
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/gemini"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
 )

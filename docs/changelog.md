@@ -8,6 +8,23 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- Voyage AI as a fifth supported provider (embeddings, multimodal embeddings, reranking)
+- `Client.Rerank` method for reordering documents by query relevance
+- `Client.EmbedMultimodal` method for multimodal (text + images) embeddings
+- `WithCapabilities` option on `ListModels` / `ListModelsWithMetadata` to filter models by capability
+- New `ModelCapability` constants: `ModelCapabilityReranking`, `ModelCapabilityMultimodalEmbeddings`
+- Proxy HTTP routes: `POST /v1/embed`, `POST /v1/embed/multimodal`, `POST /v1/rerank`
+- `?capability=` query parameter on `GET /v1/models` (repeatable; AND semantics)
+
+### Changed
+- **Breaking (for external implementers of `llm.Client`):** `ListModels` and `ListModelsWithMetadata` are now variadic, accepting `...ListModelsOption`. Source-compatible for callers; interface change for external implementers.
+- **Breaking (for external implementers of `llm.Client`):** `Rerank` and `EmbedMultimodal` added to the interface. External implementers must add these methods (returning `ErrNotSupported` if not supported).
+
+---
+
 ## [Unreleased] - Alpha 1
 
 ### Added

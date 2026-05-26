@@ -1,8 +1,8 @@
 # Providers
 
-pgEdge Go LLM Library supports four LLM providers. Each
-provider registers itself automatically when you import the
-provider package.
+pgEdge Go LLM Library supports five LLM providers (Anthropic,
+OpenAI, Gemini, Ollama, and Voyage). Each provider registers
+itself automatically when you import the provider package.
 
 ## Anthropic
 
@@ -175,6 +175,60 @@ provider injects tool definitions into the system prompt and
 parses the model's text response to extract JSON tool calls.
 The provider looks for JSON objects matching the format
 `{"tool":"tool_name","arguments":{...}}` in the response text.
+
+## Voyage AI
+
+Voyage AI provides text embeddings, multimodal embeddings, and rerankers.
+It does not provide chat completions; `Chat` and `ChatStream` return
+`ErrNotSupported`.
+
+### Authentication
+
+Set `Options.APIKey` or the `VOYAGE_API_KEY` environment variable. Voyage
+uses bearer-token auth.
+
+### Models
+
+| Model | Capabilities |
+|---|---|
+| `voyage-3.5`, `voyage-3.5-lite`, `voyage-3-large` | embeddings |
+| `voyage-code-3`, `voyage-finance-2`, `voyage-law-2` | embeddings |
+| `voyage-multimodal-3` | embeddings, multimodal_embeddings |
+| `rerank-2.5`, `rerank-2.5-lite` | reranking |
+
+Use `client.ListModelsWithMetadata(ctx, llm.WithCapabilities(llm.ModelCapabilityReranking))`
+to discover rerank-capable models programmatically.
+
+### Per-call options
+
+Voyage exposes per-call knobs through `voyage.Extension`:
+
+| Field | Purpose |
+|---|---|
+| `InputType` | `voyage.InputTypeQuery` or `voyage.InputTypeDocument` — affects retrieval quality. |
+| `OutputDimension` | 256 / 512 / 1024 / 2048 (model-dependent). |
+| `Truncation` | Pointer to bool; provider default when nil. |
+| `OutputDtype` | `float` / `int8` / `uint8` / `binary` / `ubinary`. |
+| `ReturnDocuments` | Rerank only; include documents in the response. |
+
+Example:
+
+```go
+import (
+    "github.com/pgEdge/pgedge-go-llm-lib/llm"
+    "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
+)
+
+vecs, err := client.EmbedMultimodal(ctx, llm.MultimodalEmbedRequest{
+    Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+        {Type: llm.MultimodalContentText, Text: "kittens"},
+    }}},
+    Extensions: []llm.ProviderExtension{voyage.Extension{
+        InputType:       voyage.InputTypeQuery,
+        OutputDimension: 1024,
+    }},
+})
+```
 
 ## Custom Base URLs
 
