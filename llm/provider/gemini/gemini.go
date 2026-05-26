@@ -780,20 +780,49 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 		return nil, mapError(status, body)
 	}
 
+	cfg := llm.ListModelsConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	wantEmbeddings := false
+	for _, cap := range cfg.Capabilities {
+		if cap == llm.ModelCapabilityEmbeddings {
+			wantEmbeddings = true
+			break
+		}
+	}
+
 	var infos []llm.ModelInfo
 	for _, m := range resp.Models {
-		if supportsGenerateContent(m.SupportedGenerationMethods) {
+		isEmbedding := geminiEmbeddingModel(m.SupportedGenerationMethods)
+		if isEmbedding {
+			// Embedding models are only included when the caller explicitly
+			// requests ModelCapabilityEmbeddings; they are excluded from the
+			// default (chat-focused) model list.
+			if wantEmbeddings {
+				name := strings.TrimPrefix(m.Name, "models/")
+				infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})
+			}
+		} else if supportsGenerateContent(m.SupportedGenerationMethods) {
 			// Strip "models/" prefix.
 			name := strings.TrimPrefix(m.Name, "models/")
 			infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})
 		}
 	}
 
-	cfg := llm.ListModelsConfig{}
-	for _, opt := range opts {
-		opt(&cfg)
-	}
 	return llm.FilterModelInfos(infos, cfg), nil
+}
+
+// geminiEmbeddingModel reports whether the model's supported methods indicate
+// it is an embedding model (not a chat/generation model).
+func geminiEmbeddingModel(methods []string) bool {
+	for _, m := range methods {
+		if m == "embedContent" || m == "batchEmbedContents" {
+			return true
+		}
+	}
+	return false
 }
 
 func lookupGeminiCapabilities(modelID string) []llm.ModelCapability {
