@@ -31,6 +31,7 @@ type fakeProvider struct {
 	mu            sync.RWMutex
 	model         string
 	models        []string
+	modelInfos    []llm.ModelInfo // when set, ListModelsWithMetadata returns these (ignoring models)
 	chatResp      *llm.ChatResponse
 	chatErr       error
 	streamFn      func(context.Context, llm.ChatRequest) (*llm.Stream, error)
@@ -120,17 +121,26 @@ func (f *fakeProvider) ListModels(_ context.Context, _ ...llm.ListModelsOption) 
 	return f.models, nil
 }
 
-func (f *fakeProvider) ListModelsWithMetadata(_ context.Context, _ ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
+func (f *fakeProvider) ListModelsWithMetadata(_ context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.listModelsErr != nil {
 		return nil, f.listModelsErr
 	}
-	out := make([]llm.ModelInfo, len(f.models))
-	for i, m := range f.models {
-		out[i] = llm.ModelInfo{ID: m, Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat}}
+	var infos []llm.ModelInfo
+	if len(f.modelInfos) > 0 {
+		infos = f.modelInfos
+	} else {
+		infos = make([]llm.ModelInfo, len(f.models))
+		for i, m := range f.models {
+			infos[i] = llm.ModelInfo{ID: m, Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat}}
+		}
 	}
-	return out, nil
+	var cfg llm.ListModelsConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return llm.FilterModelInfos(infos, cfg), nil
 }
 func (f *fakeProvider) Provider() string { return "fake" }
 func (f *fakeProvider) Model() string {

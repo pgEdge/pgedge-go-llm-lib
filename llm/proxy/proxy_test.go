@@ -1454,6 +1454,43 @@ func TestRerankUnsupportedReturns501(t *testing.T) {
 	}
 }
 
+func TestModelsCapabilityFilter(t *testing.T) {
+	setFake(&fakeProvider{
+		modelInfos: []llm.ModelInfo{
+			{ID: "chat-model", Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat}},
+			{ID: "embed-model", Capabilities: []llm.ModelCapability{llm.ModelCapabilityEmbeddings}},
+		},
+	})
+	p := proxy.New(proxy.Config{
+		Providers: map[string]llm.Options{"fake": {Model: "chat-model"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models?provider=fake&metadata=true&capability=embeddings", nil)
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp proxy.ModelsMetadataResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range resp.Models {
+		found := false
+		for _, c := range m.Capabilities {
+			if c == llm.ModelCapabilityEmbeddings {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("model %s leaked through filter (caps=%v)", m.ID, m.Capabilities)
+		}
+	}
+	if len(resp.Models) == 0 {
+		t.Error("expected at least one embeddings model in response, got none")
+	}
+}
+
 func TestHookStreamingResponseAssembledFromChunks(t *testing.T) {
 	// The streaming OnResponse receives a *ChatResponse assembled from
 	// SSE chunks — text deltas concatenated, tool-use deltas folded

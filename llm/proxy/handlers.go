@@ -91,8 +91,17 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var listOpts []llm.ListModelsOption
+	if caps := r.URL.Query()["capability"]; len(caps) > 0 {
+		typed := make([]llm.ModelCapability, 0, len(caps))
+		for _, c := range caps {
+			typed = append(typed, llm.ModelCapability(c))
+		}
+		listOpts = append(listOpts, llm.WithCapabilities(typed...))
+	}
+
 	if r.URL.Query().Get("metadata") == "true" {
-		models, mdErr := client.ListModelsWithMetadata(r.Context())
+		models, mdErr := client.ListModelsWithMetadata(r.Context(), listOpts...)
 		if mdErr != nil {
 			p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadGateway, Err: mdErr, RequestID: reqID})
 			return
@@ -104,7 +113,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	models, err := client.ListModels(r.Context())
+	models, err := client.ListModels(r.Context(), listOpts...)
 	if err != nil {
 		p.writeError(w, r, ErrorInfo{
 			Provider:   provider,
