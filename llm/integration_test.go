@@ -225,7 +225,7 @@ func TestIntegrationGemini(t *testing.T) {
 	}
 	chatClient, err := llm.NewClient("gemini", llm.Options{
 		APIKey: key,
-		Model:  pickModel("GEMINI_CHAT_MODEL", "gemini-1.5-flash"),
+		Model:  pickModel("GEMINI_CHAT_MODEL", "gemini-2.5-flash"),
 	})
 	if err != nil {
 		t.Fatal(err)
