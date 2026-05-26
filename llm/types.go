@@ -550,10 +550,12 @@ type ModelCapability string
 
 // ModelCapability values reported by ListModelsWithMetadata.
 const (
-	ModelCapabilityChat       ModelCapability = "chat"
-	ModelCapabilityTools      ModelCapability = "tools"
-	ModelCapabilityVision     ModelCapability = "vision"
-	ModelCapabilityEmbeddings ModelCapability = "embeddings"
-	ModelCapabilityJSONMode   ModelCapability = "json_mode"
-	ModelCapabilityStreaming  ModelCapability = "streaming"
+	ModelCapabilityChat                 ModelCapability = "chat"
+	ModelCapabilityTools                ModelCapability = "tools"
+	ModelCapabilityVision               ModelCapability = "vision"
+	ModelCapabilityEmbeddings           ModelCapability = "embeddings"
+	ModelCapabilityJSONMode             ModelCapability = "json_mode"
+	ModelCapabilityStreaming            ModelCapability = "streaming"
+	ModelCapabilityMultimodalEmbeddings ModelCapability = "multimodal_embeddings"
+	ModelCapabilityReranking            ModelCapability = "reranking"
 )
