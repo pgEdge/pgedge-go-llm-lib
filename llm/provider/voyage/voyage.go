@@ -113,9 +113,7 @@ func (c *client) ResetUsage() {
 func (c *client) addUsage(u llm.TokenUsage) {
 	c.usageMu.Lock()
 	defer c.usageMu.Unlock()
-	c.usage.PromptTokens += u.PromptTokens
-	c.usage.CompletionTokens += u.CompletionTokens
-	c.usage.TotalTokens += u.TotalTokens
+	c.usage.Add(u)
 }
 
 // ---------- Chat (not supported) ----------
