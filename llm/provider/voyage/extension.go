@@ -22,6 +22,7 @@ package voyage
 // most-impactful Voyage-specific tuning knob.
 type InputType string
 
+// InputType values accepted by Voyage's embedding endpoints.
 const (
 	InputTypeQuery    InputType = "query"
 	InputTypeDocument InputType = "document"
@@ -30,6 +31,7 @@ const (
 // OutputDtype is the numeric encoding for embedding vector components.
 type OutputDtype string
 
+// OutputDtype values accepted by Voyage's embedding endpoints.
 const (
 	OutputDtypeFloat   OutputDtype = "float"
 	OutputDtypeInt8    OutputDtype = "int8"

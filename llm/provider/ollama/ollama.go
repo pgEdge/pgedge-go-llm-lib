@@ -787,7 +787,7 @@ func (c *client) capabilitiesForModel(ctx context.Context, name string) []llm.Mo
 		}
 	}
 
-	// If no recognized capabilities were extracted but the response was non-empty,
+	// If no recognised capabilities were extracted but the response was non-empty,
 	// fall back to Chat+Streaming to avoid returning an empty slice for unknown
 	// future capability strings.
 	if len(caps) == 0 {
