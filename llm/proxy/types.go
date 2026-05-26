@@ -130,6 +130,33 @@ type EmbedMultimodalResponse struct {
 	Embeddings [][]float64 `json:"embeddings"`
 }
 
+// RerankRequest is the JSON body for POST /v1/rerank.
+type RerankRequest struct {
+	Provider  string   `json:"provider,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+	TopK      *int     `json:"top_k,omitempty"`
+}
+
+// RerankResult is one ranked document within a RerankResponse.
+type RerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+	Document       string  `json:"document,omitempty"`
+}
+
+// RerankUsage carries token-usage information for a rerank call.
+type RerankUsage struct {
+	TotalTokens int `json:"total_tokens"`
+}
+
+// RerankResponse is the JSON body returned by POST /v1/rerank.
+type RerankResponse struct {
+	Results []RerankResult `json:"results"`
+	Usage   RerankUsage    `json:"usage"`
+}
+
 // ErrorResponse is the wire shape for any non-streaming error.
 type ErrorResponse struct {
 	Error string `json:"error"`

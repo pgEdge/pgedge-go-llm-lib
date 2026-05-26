@@ -432,6 +432,59 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
+	r, reqID := p.ensureRequestID(r)
+	if reqID != "" {
+		w.Header().Set(p.requestIDHeaderName(), reqID)
+	}
+	if !p.authorize(w, r) {
+		return
+	}
+	var req RerankRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = p.cfg.DefaultProvider
+	}
+	opts, ok := p.cfg.Providers[provider]
+	if !ok {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest,
+			Err: fmt.Errorf("provider %q is not configured", provider), RequestID: reqID})
+		return
+	}
+	if req.Model != "" {
+		opts.Model = req.Model
+	}
+	client, err := llm.NewClient(provider, opts)
+	if err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+		return
+	}
+	libResp, err := client.Rerank(r.Context(), llm.RerankRequest{
+		Query: req.Query, Documents: req.Documents, TopK: req.TopK,
+	})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, llm.ErrNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		return
+	}
+	out := RerankResponse{Usage: RerankUsage{TotalTokens: libResp.Usage.TotalTokens}}
+	out.Results = make([]RerankResult, len(libResp.Results))
+	for i, res := range libResp.Results {
+		out.Results[i] = RerankResult{Index: res.Index, RelevanceScore: res.RelevanceScore, Document: res.Document}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := encodeJSON(w, out); err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+	}
+}
+
 func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 	r, reqID := p.ensureRequestID(r)
 	if reqID != "" {

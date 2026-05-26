@@ -217,6 +217,7 @@ func encodeJSON(w io.Writer, v any) error {
 //	POST /v1/chat/stream           — streaming chat (SSE)
 //	POST /v1/embed                 — text embeddings (single or batch)
 //	POST /v1/embed/multimodal      — multimodal embeddings
+//	POST /v1/rerank                — rerank documents by relevance
 func New(cfg Config) *Proxy {
 	providers := make(map[string]llm.Options, len(cfg.Providers))
 	for k, v := range cfg.Providers {
@@ -239,6 +240,7 @@ func (p *Proxy) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/chat/stream", p.handleChatStream)
 	mux.HandleFunc("POST /v1/embed", p.handleEmbed)
 	mux.HandleFunc("POST /v1/embed/multimodal", p.handleEmbedMultimodal)
+	mux.HandleFunc("POST /v1/rerank", p.handleRerank)
 	return mux
 }
 

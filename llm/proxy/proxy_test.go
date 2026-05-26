@@ -1392,6 +1392,68 @@ func TestEmbedMultimodalUnsupportedReturns501(t *testing.T) {
 	}
 }
 
+func TestRerankHappyPath(t *testing.T) {
+	setFake(&fakeProvider{
+		rerankResp: &llm.RerankResponse{
+			Results: []llm.RerankResult{
+				{Index: 1, RelevanceScore: 0.9},
+				{Index: 0, RelevanceScore: 0.4},
+			},
+			Usage: llm.TokenUsage{TotalTokens: 7},
+		},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	body := bytes.NewReader([]byte(`{
+		"provider":"fake",
+		"query":"q",
+		"documents":["a","b"]
+	}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank", body)
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Results []struct {
+			Index int     `json:"index"`
+			Score float64 `json:"relevance_score"`
+		} `json:"results"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Results) != 2 || resp.Results[0].Index != 1 {
+		t.Fatalf("unexpected response %s", rec.Body.String())
+	}
+	if resp.Usage.TotalTokens != 7 {
+		t.Errorf("usage TotalTokens = %d", resp.Usage.TotalTokens)
+	}
+}
+
+func TestRerankUnsupportedReturns501(t *testing.T) {
+	setFake(&fakeProvider{
+		rerankErr: &llm.ProviderError{Err: llm.ErrNotSupported, Message: "no", Provider: "fake"},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank",
+		bytes.NewReader([]byte(`{"provider":"fake","query":"q","documents":["a"]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", rec.Code)
+	}
+}
+
 func TestHookStreamingResponseAssembledFromChunks(t *testing.T) {
 	// The streaming OnResponse receives a *ChatResponse assembled from
 	// SSE chunks — text deltas concatenated, tool-use deltas folded
