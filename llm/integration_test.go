@@ -234,7 +234,7 @@ func TestIntegrationGemini(t *testing.T) {
 
 	embedClient, err := llm.NewClient("gemini", llm.Options{
 		APIKey: key,
-		Model:  pickModel("GEMINI_EMBED_MODEL", "text-embedding-004"),
+		Model:  pickModel("GEMINI_EMBED_MODEL", "gemini-embedding-001"),
 	})
 	if err != nil {
 		t.Fatal(err)
