@@ -116,6 +116,29 @@ if err != nil {
 }
 ```
 
+## Multimodal Embeddings
+
+`Client.EmbedMultimodal` returns an embedding vector for each input,
+where each input may contain interleaved text and images. Today only
+Voyage (`voyage-multimodal-3`) implements this; other providers return
+`ErrNotSupported`.
+
+```go
+import "github.com/pgEdge/pgedge-go-llm-lib/llm"
+
+vecs, err := client.EmbedMultimodal(ctx, llm.MultimodalEmbedRequest{
+    Inputs: []llm.MultimodalInput{
+        {Content: []llm.MultimodalContent{
+            {Type: llm.MultimodalContentText, Text: "a photo of a kitten:"},
+            {Type: llm.MultimodalContentImageURL, ImageURL: "https://example.com/kitten.jpg"},
+        }},
+    },
+})
+```
+
+Use `client.ListModelsWithMetadata(ctx, llm.WithCapabilities(llm.ModelCapabilityMultimodalEmbeddings))`
+to discover models that support this method.
+
 ## Next Steps
 
 The following documents provide additional information:
