@@ -631,3 +631,28 @@ type RerankResponse struct {
 	Results []RerankResult
 	Usage   TokenUsage
 }
+
+// ListModelsConfig is the configuration accumulated from ListModelsOption
+// values passed to Client.ListModels and Client.ListModelsWithMetadata.
+// Callers don't construct this directly; use options like WithCapabilities.
+type ListModelsConfig struct {
+	// Capabilities, when non-empty, restricts results to models whose
+	// ModelInfo.Capabilities contains EVERY listed capability. An
+	// empty Capabilities slice means "no filter".
+	Capabilities []ModelCapability
+}
+
+// ListModelsOption configures a single ListModels call. Pass values
+// returned by WithCapabilities (and future option constructors) as
+// the variadic argument to Client.ListModels.
+type ListModelsOption func(*ListModelsConfig)
+
+// WithCapabilities filters ListModels to models whose Capabilities
+// contain every listed value. Calls accumulate: passing two
+// WithCapabilities options is equivalent to one call with all
+// capabilities concatenated.
+func WithCapabilities(caps ...ModelCapability) ListModelsOption {
+	return func(c *ListModelsConfig) {
+		c.Capabilities = append(c.Capabilities, caps...)
+	}
+}

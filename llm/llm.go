@@ -147,3 +147,40 @@ func NewClient(provider string, opts Options) (Client, error) {
 	opts = opts.WithDefaults()
 	return constructor(opts)
 }
+
+// FilterModelInfos applies a ListModelsConfig to a slice of ModelInfo.
+// It is a building block for provider implementations of ListModels /
+// ListModelsWithMetadata: providers fetch their full catalogue, then
+// call FilterModelInfos to apply caller-supplied options.
+//
+// Filtering is AND-of-capabilities: a model is kept only if its
+// Capabilities slice contains every value in cfg.Capabilities.
+// An empty cfg.Capabilities slice keeps every input.
+func FilterModelInfos(infos []ModelInfo, cfg ListModelsConfig) []ModelInfo {
+	if len(cfg.Capabilities) == 0 {
+		return infos
+	}
+	out := make([]ModelInfo, 0, len(infos))
+	for _, info := range infos {
+		if hasAllCapabilities(info.Capabilities, cfg.Capabilities) {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
+func hasAllCapabilities(have, want []ModelCapability) bool {
+	for _, w := range want {
+		found := false
+		for _, h := range have {
+			if h == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
