@@ -1758,3 +1758,152 @@ func TestEmbedTruncatePointerExtension(t *testing.T) {
 		t.Errorf("expected 2 HTTP calls, got %d", got)
 	}
 }
+
+// ---------- Embed: num_ctx (EmbedContextLength) ----------
+
+// embedCaptureServer builds a /api/embed test server that decodes the
+// full request body into captured and returns a fixed one-vector
+// response. Used by the num_ctx tests to assert what landed on the wire.
+func embedCaptureServer(t *testing.T, captured *map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": [][]float64{{0.1}},
+		})
+	}))
+}
+
+// numCtxFrom returns the wire value of options.num_ctx from a decoded
+// request body, along with whether the options object was present.
+func numCtxFrom(t *testing.T, body map[string]any) (val float64, present bool) {
+	t.Helper()
+	raw, ok := body["options"]
+	if !ok {
+		return 0, false
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("options should be an object, got %T: %v", raw, raw)
+	}
+	num, ok := opts["num_ctx"]
+	if !ok {
+		return 0, false
+	}
+	f, ok := num.(float64)
+	if !ok {
+		t.Fatalf("num_ctx should be a number, got %T: %v", num, num)
+	}
+	return f, true
+}
+
+func TestEmbedNumCtxSet(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedContextLength: 8192})
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	got, ok := numCtxFrom(t, captured)
+	if !ok {
+		t.Fatalf("options.num_ctx missing from request body: %#v", captured)
+	}
+	if got != 8192 {
+		t.Errorf("num_ctx = %v, want 8192", got)
+	}
+}
+
+func TestEmbedNumCtxUnsetOmitsOptions(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL)
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if _, present := captured["options"]; present {
+		t.Errorf("options should be omitted when extension is absent, got %#v", captured)
+	}
+}
+
+func TestEmbedNumCtxZeroValueOmitsOptions(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// Extension present but zero — should still be omitted on the wire
+	// so Ollama uses the model's compiled default.
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{})
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if _, present := captured["options"]; present {
+		t.Errorf("options should be omitted for zero EmbedContextLength, got %#v", captured)
+	}
+}
+
+func TestEmbedBatchNumCtxSet(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// EmbedBatch loops over Embed; verify num_ctx still rides on each
+	// underlying /api/embed call. The capture server records the last
+	// request — sufficient since both calls go through the same builder.
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedContextLength: 4096})
+	if _, err := c.EmbedBatch(context.Background(), []string{"a", "b"}); err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	got, ok := numCtxFrom(t, captured)
+	if !ok {
+		t.Fatalf("options.num_ctx missing from request body: %#v", captured)
+	}
+	if got != 4096 {
+		t.Errorf("num_ctx = %v, want 4096", got)
+	}
+}
+
+func TestEmbedNumCtxIgnoresForeignExtension(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// A foreign extension alongside a valid Ollama one — only the
+	// Ollama one should take effect; the foreign extension is ignored.
+	c := newEmbedClientWithExtension(t, srv.URL,
+		foreignExtension{},
+		Extension{EmbedContextLength: 2048},
+	)
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	got, ok := numCtxFrom(t, captured)
+	if !ok {
+		t.Fatalf("options.num_ctx missing from request body: %#v", captured)
+	}
+	if got != 2048 {
+		t.Errorf("num_ctx = %v, want 2048", got)
+	}
+}
+
+func TestEmbedNumCtxForeignExtensionAloneOmitsOptions(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// A foreign extension on its own must not produce an options object;
+	// providers ignore extensions whose ProviderName doesn't match.
+	c := newEmbedClientWithExtension(t, srv.URL, foreignExtension{})
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if _, present := captured["options"]; present {
+		t.Errorf("options should be omitted when only a foreign extension is present, got %#v", captured)
+	}
+}

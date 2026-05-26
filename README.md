@@ -377,6 +377,33 @@ vec, _ := client.Embed(ctx, "hello") // 512-dim vector
 `EmbeddingDimensions: 0` (the zero value) omits the parameter entirely
 and the model returns its native vector size.
 
+### Ollama: embedding context length
+
+Ollama's `/api/embed` endpoint accepts an `options.num_ctx` field that
+overrides the model's compiled context window. Raise it when chunks
+routinely exceed the default (e.g. `nomic-embed-text` ships with 2048
+and rejects longer inputs with "the input length exceeds the context
+length"). Attach an `ollama.Extension` to `llm.Options.Extensions`:
+
+```go
+import (
+    "github.com/pgEdge/pgedge-go-llm-lib/llm"
+    "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
+)
+
+client, _ := llm.NewClient("ollama", llm.Options{
+    BaseURL: "http://localhost:11434",
+    Model:   "nomic-embed-text",
+    Extensions: []llm.ProviderExtension{
+        ollama.Extension{EmbedContextLength: 8192},
+    },
+})
+vec, _ := client.Embed(ctx, longText) // num_ctx=8192 on the wire
+```
+
+`EmbedContextLength: 0` (the zero value) omits `num_ctx` from the
+request body and Ollama uses the model's compiled default.
+
 ## Errors and Retries
 
 ```go
