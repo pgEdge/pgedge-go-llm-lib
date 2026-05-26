@@ -1,8 +1,8 @@
 # Providers
 
-pgEdge Go LLM Library supports four LLM providers. Each
-provider registers itself automatically when you import the
-provider package.
+pgEdge Go LLM Library supports five LLM providers (Anthropic,
+OpenAI, Gemini, Ollama, and Voyage). Each provider registers
+itself automatically when you import the provider package.
 
 ## Anthropic
 

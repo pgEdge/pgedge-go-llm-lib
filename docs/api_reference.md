@@ -17,10 +17,16 @@ LLM providers. All providers implement this interface.
 type Client interface {
     Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
     ChatStream(ctx context.Context, req ChatRequest) (*Stream, error)
+
     Embed(ctx context.Context, text string) ([]float64, error)
     EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
-    ListModels(ctx context.Context) ([]string, error)
-    ListModelsWithMetadata(ctx context.Context) ([]ModelInfo, error)
+
+    Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
+    EmbedMultimodal(ctx context.Context, req MultimodalEmbedRequest) ([][]float64, error)
+
+    ListModels(ctx context.Context, opts ...ListModelsOption) ([]string, error)
+    ListModelsWithMetadata(ctx context.Context, opts ...ListModelsOption) ([]ModelInfo, error)
+
     Ping(ctx context.Context) error
     Provider() string
     Model() string
@@ -35,6 +41,8 @@ type Client interface {
 | `ChatStream`             | Send a chat request and stream chunks. |
 | `Embed`                  | Generate an embedding for a text string. |
 | `EmbedBatch`             | Generate embeddings for multiple texts. |
+| `Rerank`                 | Reorder documents by relevance to a query. |
+| `EmbedMultimodal`        | Generate embeddings for multimodal (text + images) inputs. |
 | `ListModels`             | List available model names from the provider. |
 | `ListModelsWithMetadata` | List models with capability and limit metadata. |
 | `Ping`                   | Check provider connectivity (lightweight HEAD/GET). |

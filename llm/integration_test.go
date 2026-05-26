@@ -24,7 +24,7 @@ import (
 )
 
 func TestAllProvidersRegistered(t *testing.T) {
-	providers := []string{"anthropic", "openai", "gemini", "ollama"}
+	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage"}
 	for _, p := range providers {
 		client, err := llm.NewClient(p, llm.Options{
 			APIKey: "test-key",
@@ -44,7 +44,7 @@ func TestAllProvidersRegistered(t *testing.T) {
 }
 
 func TestAllProvidersZeroInitialUsage(t *testing.T) {
-	providers := []string{"anthropic", "openai", "gemini", "ollama"}
+	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage"}
 	for _, p := range providers {
 		client, err := llm.NewClient(p, llm.Options{
 			APIKey: "test-key",

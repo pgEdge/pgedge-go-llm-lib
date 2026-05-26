@@ -67,7 +67,7 @@ func main() {
 }
 ```
 
-Import all four providers at once with `_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"`,
+Import all five providers at once with `_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"`,
 or import individual provider packages to keep binary size small:
 
 ```go

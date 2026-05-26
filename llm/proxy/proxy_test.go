@@ -1092,8 +1092,9 @@ func TestHandleChatStreamMidStreamErrorFiresHooks(t *testing.T) {
 
 func TestAuthorizeRejectsAllEndpoints(t *testing.T) {
 	// A single Authorize hook that rejects every request must short-
-	// circuit /v1/providers, /v1/models, /v1/health, /v1/chat, and
-	// /v1/chat/stream alike.
+	// circuit /v1/providers, /v1/models, /v1/health, /v1/chat,
+	// /v1/chat/stream, /v1/embed, /v1/embed/multimodal, and
+	// /v1/rerank alike.
 	setFake(&fakeProvider{})
 	rejected := errors.New("nope")
 	p := proxy.New(proxy.Config{
@@ -1113,6 +1114,9 @@ func TestAuthorizeRejectsAllEndpoints(t *testing.T) {
 		{http.MethodGet, "/v1/health", ""},
 		{http.MethodPost, "/v1/chat", `{"messages":[]}`},
 		{http.MethodPost, "/v1/chat/stream", `{"messages":[]}`},
+		{http.MethodPost, "/v1/embed", `{"provider":"fake","input":["x"]}`},
+		{http.MethodPost, "/v1/embed/multimodal", `{"provider":"fake","inputs":[]}`},
+		{http.MethodPost, "/v1/rerank", `{"provider":"fake","query":"q","documents":["a"]}`},
 	}
 	for _, c := range calls {
 		req, _ := http.NewRequest(c.method, srv.URL+c.path, strings.NewReader(c.body))

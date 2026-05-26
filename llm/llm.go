@@ -41,7 +41,7 @@ import (
 )
 
 // Client is the unified interface for interacting with LLM providers.
-// All four built-in providers (Anthropic, OpenAI, Gemini, Ollama)
+// All five built-in providers (Anthropic, OpenAI, Gemini, Ollama, Voyage)
 // implement this interface.
 //
 // Create a Client with NewClient; import provider packages (or
