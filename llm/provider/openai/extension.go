@@ -42,7 +42,7 @@ func findExtension(exts []llm.ProviderExtension) *Extension {
 		if e == nil {
 			continue
 		}
-		if rv := reflect.ValueOf(e); rv.Kind() == reflect.Ptr && rv.IsNil() {
+		if rv := reflect.ValueOf(e); rv.Kind() == reflect.Pointer && rv.IsNil() {
 			continue
 		}
 		if e.ProviderName() != providerName {
