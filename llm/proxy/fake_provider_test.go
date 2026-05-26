@@ -34,14 +34,14 @@ type fakeProvider struct {
 	chatResp      *llm.ChatResponse
 	chatErr       error
 	streamFn      func(context.Context, llm.ChatRequest) (*llm.Stream, error)
-	listModelsErr error              // when set, ListModels and ListModelsWithMetadata return this error
-	pingErr       error              // when set, Ping returns this error
-	embedVec      [][]float64        // when set, Embed/EmbedBatch return this
-	embedErr      error              // when set, Embed/EmbedBatch return this error
-	multimodalVec [][]float64        // when set, EmbedMultimodal returns this
-	multimodalErr error              // when set, EmbedMultimodal returns this error
+	listModelsErr error               // when set, ListModels and ListModelsWithMetadata return this error
+	pingErr       error               // when set, Ping returns this error
+	embedVec      [][]float64         // when set, Embed/EmbedBatch return this
+	embedErr      error               // when set, Embed/EmbedBatch return this error
+	multimodalVec [][]float64         // when set, EmbedMultimodal returns this
+	multimodalErr error               // when set, EmbedMultimodal returns this error
 	rerankResp    *llm.RerankResponse // when set, Rerank returns this
-	rerankErr     error              // when set, Rerank returns this error
+	rerankErr     error               // when set, Rerank returns this error
 }
 
 var (
