@@ -877,18 +877,43 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 		return nil, mapError(status, body)
 	}
 
-	var infos []llm.ModelInfo
-	for _, m := range resp.Data {
-		if !shouldFilterModel(m.ID) {
-			infos = append(infos, llm.ModelInfo{ID: m.ID, Capabilities: lookupOpenAICapabilities(m.ID)})
-		}
-	}
-
 	cfg := llm.ListModelsConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+
+	wantEmbeddings := false
+	for _, cap := range cfg.Capabilities {
+		if cap == llm.ModelCapabilityEmbeddings {
+			wantEmbeddings = true
+			break
+		}
+	}
+
+	var infos []llm.ModelInfo
+	for _, m := range resp.Data {
+		caps := lookupOpenAICapabilities(m.ID)
+		isEmbedding := openaiEmbeddingModel(m.ID)
+		if isEmbedding {
+			// Embedding models are only included when the caller explicitly
+			// requests ModelCapabilityEmbeddings; they are excluded from the
+			// default (chat-focused) model list.
+			if wantEmbeddings {
+				infos = append(infos, llm.ModelInfo{ID: m.ID, Capabilities: caps})
+			}
+		} else if !shouldFilterModel(m.ID) {
+			infos = append(infos, llm.ModelInfo{ID: m.ID, Capabilities: caps})
+		}
+	}
+
 	return llm.FilterModelInfos(infos, cfg), nil
+}
+
+// openaiEmbeddingModel reports whether id identifies an OpenAI
+// text-embedding model.
+func openaiEmbeddingModel(id string) bool {
+	return strings.HasPrefix(id, "text-embedding-") ||
+		id == "text-embedding-ada-002"
 }
 
 func lookupOpenAICapabilities(modelID string) []llm.ModelCapability {

@@ -1597,3 +1597,35 @@ func TestEmbedMultimodalUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrNotSupported, got %v", err)
 	}
 }
+
+func TestListModelsCapabilityFilterEmbeddings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[
+            {"id":"gpt-4o","object":"model"},
+            {"id":"text-embedding-3-small","object":"model"}
+        ]}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	infos, err := c.ListModelsWithMetadata(context.Background(),
+		llm.WithCapabilities(llm.ModelCapabilityEmbeddings))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) == 0 {
+		t.Fatalf("expected at least one embedding model")
+	}
+	for _, info := range infos {
+		found := false
+		for _, cap := range info.Capabilities {
+			if cap == llm.ModelCapabilityEmbeddings {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("model %s missing embeddings capability", info.ID)
+		}
+	}
+}
