@@ -199,7 +199,9 @@ func TestEmbedMultimodalTextOnly(t *testing.T) {
 func TestEmbedMultimodalImageURL(t *testing.T) {
 	var captured map[string]any
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured)
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
             "data":[{"embedding":[1],"index":0}],
@@ -229,7 +231,9 @@ func TestEmbedMultimodalImageURL(t *testing.T) {
 func TestEmbedMultimodalImageData(t *testing.T) {
 	var captured map[string]any
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured)
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
             "data":[{"embedding":[1],"index":0}],
@@ -257,7 +261,9 @@ func TestEmbedMultimodalImageData(t *testing.T) {
 func TestEmbedMultimodalExtensionRoundtrip(t *testing.T) {
 	var captured map[string]any
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured)
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
             "data":[{"embedding":[1],"index":0}],
@@ -347,7 +353,9 @@ func TestRerankReturnDocuments(t *testing.T) {
 func TestRerankTopK(t *testing.T) {
 	var captured map[string]any
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured)
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"data":[],"model":"rerank-2.5","usage":{"total_tokens":0}}`))
 	})
@@ -516,7 +524,9 @@ func TestRerankIgnoresForeignExtension(t *testing.T) {
 	// for a different provider must not affect the wire request.
 	var captured map[string]any
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured)
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"data":[],"model":"rerank-2.5","usage":{"total_tokens":0}}`))
 	})
@@ -536,7 +546,9 @@ func TestRerankWithPointerExtension(t *testing.T) {
 	// Exercises findExtension's *Extension type-assertion branch.
 	var captured map[string]any
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured)
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"data":[],"model":"rerank-2.5","usage":{"total_tokens":0}}`))
 	})
