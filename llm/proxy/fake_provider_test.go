@@ -136,3 +136,11 @@ func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.Rera
 		Provider: "fake",
 	}
 }
+
+func (f *fakeProvider) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "fake does not support multimodal embeddings",
+		Provider: "fake",
+	}
+}

@@ -658,6 +658,16 @@ func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResp
 	}
 }
 
+// ---------- EmbedMultimodal ----------
+
+func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Anthropic does not support multimodal embeddings",
+		Provider: "anthropic",
+	}
+}
+
 // ---------- ListModels ----------
 
 type anthropicModelsResponse struct {

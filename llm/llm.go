@@ -63,6 +63,11 @@ type Client interface {
 	// (currently every provider except Voyage).
 	Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
 
+	// EmbedMultimodal generates embedding vectors for multimodal inputs
+	// (text and/or images). Returns ErrNotSupported for providers that
+	// do not support multimodal embeddings.
+	EmbedMultimodal(ctx context.Context, req MultimodalEmbedRequest) ([][]float64, error)
+
 	// ListModels returns the names of user-facing models available from
 	// the provider. With no options, providers return their default
 	// catalogue (typically chat models for chat-first providers, and

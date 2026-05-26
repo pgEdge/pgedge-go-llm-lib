@@ -1480,3 +1480,17 @@ func TestRerankUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrNotSupported, got %v", err)
 	}
 }
+
+func TestEmbedMultimodalUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+			{Type: llm.MultimodalContentText, Text: "hi"},
+		}}},
+	})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}
