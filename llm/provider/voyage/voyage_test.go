@@ -29,6 +29,7 @@ func newTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, ll
 		APIKey:  "test-key",
 		Model:   "voyage-3.5-lite",
 		BaseURL: srv.URL, // ValidateBaseURL trims any trailing slash
+		Retry:   llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,5 +360,233 @@ func TestRerankTopK(t *testing.T) {
 	}
 	if captured["top_k"].(float64) != 5 {
 		t.Errorf("top_k = %v, want 5", captured["top_k"])
+	}
+}
+
+func TestProviderAndModel(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	if got := c.Provider(); got != "voyage" {
+		t.Errorf("Provider() = %q, want %q", got, "voyage")
+	}
+	if got := c.Model(); got != "voyage-3.5-lite" {
+		t.Errorf("Model() = %q, want %q", got, "voyage-3.5-lite")
+	}
+}
+
+func TestResetUsage(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"embedding":[0.1],"index":0}],"model":"voyage-3.5-lite","usage":{"total_tokens":7}}`))
+	})
+	if _, err := c.Embed(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Usage().TotalTokens; got != 7 {
+		t.Fatalf("usage before reset = %d, want 7", got)
+	}
+	c.ResetUsage()
+	if got := c.Usage().TotalTokens; got != 0 {
+		t.Errorf("usage after reset = %d, want 0", got)
+	}
+}
+
+func TestPingSuccess(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"embedding":[0.1],"index":0}],"model":"voyage-3.5-lite","usage":{"total_tokens":1}}`))
+	})
+	if err := c.Ping(context.Background()); err != nil {
+		t.Errorf("Ping() = %v, want nil", err)
+	}
+}
+
+func TestPingAuthError(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	err := c.Ping(context.Background())
+	if !errors.Is(err, llm.ErrAuthentication) {
+		t.Errorf("Ping() = %v, want ErrAuthentication", err)
+	}
+}
+
+func TestPingOther4xxReachable(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	if err := c.Ping(context.Background()); err != nil {
+		t.Errorf("Ping() should treat non-auth 4xx as reachable, got %v", err)
+	}
+}
+
+func TestEmbed429RateLimit(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	_, err := c.Embed(context.Background(), "x")
+	if !errors.Is(err, llm.ErrRateLimit) {
+		t.Errorf("expected ErrRateLimit, got %v", err)
+	}
+}
+
+func TestEmbed5xxProviderError(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	_, err := c.Embed(context.Background(), "x")
+	if !errors.Is(err, llm.ErrProviderError) {
+		t.Errorf("expected ErrProviderError, got %v", err)
+	}
+}
+
+func TestEmbedMissingModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv.Close)
+	c, err := llm.NewClient("voyage", llm.Options{APIKey: "test-key", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Embed(context.Background(), "x")
+	if !errors.Is(err, llm.ErrInvalidRequest) {
+		t.Errorf("expected ErrInvalidRequest when Model is empty, got %v", err)
+	}
+}
+
+func TestEmbedMissingIndex(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"embedding":[0.1],"index":0}],"model":"voyage-3.5-lite","usage":{"total_tokens":2}}`))
+	})
+	_, err := c.EmbedBatch(context.Background(), []string{"a", "b"})
+	if !errors.Is(err, llm.ErrProviderError) {
+		t.Errorf("expected ErrProviderError for missing embedding, got %v", err)
+	}
+}
+
+func TestEmbedIndexOutOfRange(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"embedding":[0.1],"index":5}],"model":"voyage-3.5-lite","usage":{"total_tokens":1}}`))
+	})
+	_, err := c.Embed(context.Background(), "x")
+	if !errors.Is(err, llm.ErrProviderError) {
+		t.Errorf("expected ErrProviderError for out-of-range index, got %v", err)
+	}
+}
+
+func TestEmbedMultimodalUnknownContentType(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not be called when content type is invalid")
+	})
+	_, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+			{Type: "bogus"},
+		}}},
+	})
+	if !errors.Is(err, llm.ErrInvalidRequest) {
+		t.Errorf("expected ErrInvalidRequest for unknown content type, got %v", err)
+	}
+}
+
+func TestNewWithEnvAPIKey(t *testing.T) {
+	t.Setenv("VOYAGE_API_KEY", "env-key")
+	c, err := llm.NewClient("voyage", llm.Options{Model: "voyage-3.5-lite"})
+	if err != nil {
+		t.Fatalf("expected env-var fallback to populate APIKey, got %v", err)
+	}
+	if c.Provider() != "voyage" {
+		t.Errorf("Provider() = %q", c.Provider())
+	}
+}
+
+func TestNewInvalidBaseURL(t *testing.T) {
+	_, err := llm.NewClient("voyage", llm.Options{APIKey: "k", BaseURL: "::not-a-url::"})
+	if err == nil {
+		t.Fatal("expected error for malformed base URL")
+	}
+}
+
+// otherProviderExt is a ProviderExtension whose ProviderName != "voyage".
+type otherProviderExt struct{}
+
+func (otherProviderExt) ProviderName() string { return "not-voyage" }
+
+func TestRerankIgnoresForeignExtension(t *testing.T) {
+	// Confirms findExtension's "wrong-provider" branch: passing an extension
+	// for a different provider must not affect the wire request.
+	var captured map[string]any
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[],"model":"rerank-2.5","usage":{"total_tokens":0}}`))
+	})
+	_, err := c.Rerank(context.Background(), llm.RerankRequest{
+		Query: "q", Documents: []string{"a"},
+		Extensions: []llm.ProviderExtension{otherProviderExt{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := captured["return_documents"]; present {
+		t.Errorf("foreign extension should not have set return_documents; body=%v", captured)
+	}
+}
+
+func TestRerankWithPointerExtension(t *testing.T) {
+	// Exercises findExtension's *Extension type-assertion branch.
+	var captured map[string]any
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[],"model":"rerank-2.5","usage":{"total_tokens":0}}`))
+	})
+	tru := true
+	_, err := c.Rerank(context.Background(), llm.RerankRequest{
+		Query: "q", Documents: []string{"a"},
+		Extensions: []llm.ProviderExtension{&voyage.Extension{ReturnDocuments: &tru}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := captured["return_documents"].(bool); !ok || !got {
+		t.Errorf("expected return_documents=true on wire, got %v", captured["return_documents"])
+	}
+}
+
+func TestEmbedNetworkError(t *testing.T) {
+	// Close the server immediately so the next request fails with a
+	// transport-level error. This exercises postJSON's `err != nil`
+	// branch (status == 0) and propagates up through embed and Embed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+	c, err := llm.NewClient("voyage", llm.Options{
+		APIKey:  "test-key",
+		Model:   "voyage-3.5-lite",
+		BaseURL: srv.URL,
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Embed(context.Background(), "x"); err == nil {
+		t.Fatal("expected network error")
+	}
+}
+
+func TestNewWithOnRetryHook(t *testing.T) {
+	// Triggers the OnRetry-hook wrapping branch in New. The hook itself
+	// is invoked when the retry layer fires (e.g., on 5xx). We don't
+	// assert hook invocation — just that construction succeeds with the
+	// hook wired up.
+	c, err := llm.NewClient("voyage", llm.Options{
+		APIKey:  "k",
+		Model:   "voyage-3.5-lite",
+		OnRetry: func(e llm.RetryEvent) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil client")
 	}
 }
