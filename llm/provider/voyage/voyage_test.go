@@ -11,13 +11,14 @@ package voyage_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
-	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
+	voyage "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
 )
 
 func newTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, llm.Client) {
@@ -166,5 +167,117 @@ func TestEmbedAuthError(t *testing.T) {
 	}
 	if !errors.Is(err, llm.ErrAuthentication) {
 		t.Fatalf("expected ErrAuthentication, got %v", err)
+	}
+}
+
+func TestEmbedMultimodalTextOnly(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/multimodalembeddings" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+            "data":[{"embedding":[0.5,0.6],"index":0}],
+            "model":"voyage-multimodal-3",
+            "usage":{"total_tokens":4}
+        }`))
+	})
+	vs, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+			{Type: llm.MultimodalContentText, Text: "a kitten"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) != 1 || vs[0][0] != 0.5 {
+		t.Fatalf("unexpected result %v", vs)
+	}
+}
+
+func TestEmbedMultimodalImageURL(t *testing.T) {
+	var captured map[string]any
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+            "data":[{"embedding":[1],"index":0}],
+            "model":"voyage-multimodal-3",
+            "usage":{"total_tokens":2}
+        }`))
+	})
+	_, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+			{Type: llm.MultimodalContentImageURL, ImageURL: "https://example.com/x.jpg"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := captured["inputs"].([]any)
+	first := inputs[0].(map[string]any)
+	content := first["content"].([]any)[0].(map[string]any)
+	if content["type"] != "image_url" {
+		t.Errorf("wire type = %v", content["type"])
+	}
+	if content["image_url"] != "https://example.com/x.jpg" {
+		t.Errorf("wire image_url = %v", content["image_url"])
+	}
+}
+
+func TestEmbedMultimodalImageData(t *testing.T) {
+	var captured map[string]any
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+            "data":[{"embedding":[1],"index":0}],
+            "model":"voyage-multimodal-3",
+            "usage":{"total_tokens":2}
+        }`))
+	})
+	_, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{
+			{Type: llm.MultimodalContentImageData, ImageData: []byte{0xff, 0xd8, 0xff}, MIMEType: "image/jpeg"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := captured["inputs"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if content["type"] != "image_base64" {
+		t.Errorf("wire type = %v", content["type"])
+	}
+	if content["image_base64"] == nil {
+		t.Errorf("expected image_base64 in payload, got %v", content)
+	}
+}
+
+func TestEmbedMultimodalExtensionRoundtrip(t *testing.T) {
+	var captured map[string]any
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+            "data":[{"embedding":[1],"index":0}],
+            "model":"voyage-multimodal-3",
+            "usage":{"total_tokens":1}
+        }`))
+	})
+	_, err := c.EmbedMultimodal(context.Background(), llm.MultimodalEmbedRequest{
+		Inputs: []llm.MultimodalInput{{Content: []llm.MultimodalContent{{Type: llm.MultimodalContentText, Text: "x"}}}},
+		Extensions: []llm.ProviderExtension{voyage.Extension{
+			InputType:       voyage.InputTypeQuery,
+			OutputDimension: 512,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured["input_type"] != "query" {
+		t.Errorf("input_type = %v", captured["input_type"])
+	}
+	if captured["output_dimension"].(float64) != 512 {
+		t.Errorf("output_dimension = %v", captured["output_dimension"])
 	}
 }

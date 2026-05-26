@@ -11,6 +11,7 @@ package voyage
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -271,8 +272,71 @@ func (c *client) embed(ctx context.Context, texts []string, model string, ext *E
 	return out, nil
 }
 
-func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
-	return nil, &llm.ProviderError{Err: llm.ErrNotSupported, Message: "voyage: EmbedMultimodal not implemented yet", Provider: providerName}
+type multimodalContentWire struct {
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	ImageBase64 string `json:"image_base64,omitempty"`
+}
+
+type multimodalInputWire struct {
+	Content []multimodalContentWire `json:"content"`
+}
+
+type multimodalEmbeddingsRequest struct {
+	Inputs          []multimodalInputWire `json:"inputs"`
+	Model           string                `json:"model"`
+	InputType       string                `json:"input_type,omitempty"`
+	Truncation      *bool                 `json:"truncation,omitempty"`
+	OutputDimension int                   `json:"output_dimension,omitempty"`
+	OutputDtype     string                `json:"output_dtype,omitempty"`
+}
+
+func (c *client) EmbedMultimodal(ctx context.Context, req llm.MultimodalEmbedRequest) ([][]float64, error) {
+	if c.model == "" {
+		return nil, &llm.ProviderError{Err: llm.ErrInvalidRequest, Message: "Voyage requires Options.Model", Provider: providerName}
+	}
+	wireInputs := make([]multimodalInputWire, len(req.Inputs))
+	for i, in := range req.Inputs {
+		wireContent := make([]multimodalContentWire, len(in.Content))
+		for j, mc := range in.Content {
+			wireContent[j] = contentToWire(mc)
+		}
+		wireInputs[i] = multimodalInputWire{Content: wireContent}
+	}
+	wire := multimodalEmbeddingsRequest{Inputs: wireInputs, Model: c.model}
+	if ext := findExtension(req.Extensions); ext != nil {
+		wire.InputType = string(ext.InputType)
+		wire.Truncation = ext.Truncation
+		wire.OutputDimension = ext.OutputDimension
+		wire.OutputDtype = string(ext.OutputDtype)
+	}
+	var resp embeddingsResponse
+	if err := c.postJSON(ctx, "/multimodalembeddings", wire, &resp); err != nil {
+		return nil, err
+	}
+	out := make([][]float64, len(req.Inputs))
+	for _, d := range resp.Data {
+		if d.Index < 0 || d.Index >= len(out) {
+			return nil, &llm.ProviderError{Err: llm.ErrProviderError, Message: "embedding index out of range", Provider: providerName}
+		}
+		out[d.Index] = d.Embedding
+	}
+	c.addUsage(llm.TokenUsage{TotalTokens: resp.Usage.TotalTokens})
+	return out, nil
+}
+
+func contentToWire(mc llm.MultimodalContent) multimodalContentWire {
+	switch mc.Type {
+	case llm.MultimodalContentText:
+		return multimodalContentWire{Type: "text", Text: mc.Text}
+	case llm.MultimodalContentImageURL:
+		return multimodalContentWire{Type: "image_url", ImageURL: mc.ImageURL}
+	case llm.MultimodalContentImageData:
+		return multimodalContentWire{Type: "image_base64", ImageBase64: base64.StdEncoding.EncodeToString(mc.ImageData)}
+	default:
+		return multimodalContentWire{}
+	}
 }
 
 func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
