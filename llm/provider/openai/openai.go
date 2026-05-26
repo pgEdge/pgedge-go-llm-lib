@@ -722,8 +722,9 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 // ---------- Embed ----------
 
 type openaiEmbedRequest struct {
-	Model string `json:"model"`
-	Input any    `json:"input"`
+	Model      string `json:"model"`
+	Input      any    `json:"input"`
+	Dimensions int    `json:"dimensions,omitempty"`
 }
 
 type openaiEmbedResponse struct {
@@ -739,6 +740,9 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 	reqBody := openaiEmbedRequest{
 		Model: c.model,
 		Input: text,
+	}
+	if ext := findExtension(c.opts.Extensions); ext != nil {
+		reqBody.Dimensions = ext.EmbeddingDimensions
 	}
 
 	var resp openaiEmbedResponse
@@ -765,6 +769,9 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 	reqBody := openaiEmbedRequest{
 		Model: c.model,
 		Input: texts,
+	}
+	if ext := findExtension(c.opts.Extensions); ext != nil {
+		reqBody.Dimensions = ext.EmbeddingDimensions
 	}
 
 	var resp openaiEmbedResponse

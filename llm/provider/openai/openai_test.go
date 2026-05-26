@@ -528,6 +528,163 @@ func TestEmbedBatch(t *testing.T) {
 	}
 }
 
+// embedCaptureServer builds a /embeddings test server that decodes the
+// request body into captured and returns a fixed one-vector response.
+func embedCaptureServer(t *testing.T, captured *map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{0.1}, "index": 0},
+			},
+		})
+	}))
+}
+
+func newEmbedClient(t *testing.T, url string, exts ...llm.ProviderExtension) llm.Client {
+	t.Helper()
+	c, err := New(llm.Options{
+		APIKey:     "test-key",
+		Model:      "text-embedding-3-small",
+		BaseURL:    url,
+		Retry:      llm.RetryConfig{Disabled: true},
+		Extensions: exts,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	return c
+}
+
+func TestEmbedDimensionsSet(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	c := newEmbedClient(t, srv.URL, Extension{EmbeddingDimensions: 256})
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	got, ok := captured["dimensions"]
+	if !ok {
+		t.Fatalf("dimensions missing from request body: %#v", captured)
+	}
+	if got.(float64) != 256 {
+		t.Errorf("dimensions = %v, want 256", got)
+	}
+}
+
+func TestEmbedDimensionsUnsetOmitted(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// No extension passed at all.
+	c := newEmbedClient(t, srv.URL)
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if _, present := captured["dimensions"]; present {
+		t.Errorf("dimensions should be omitted when extension is absent, got %#v", captured)
+	}
+}
+
+func TestEmbedDimensionsZeroValueOmitted(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// Extension present but zero — should still be omitted on the wire.
+	c := newEmbedClient(t, srv.URL, Extension{})
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if _, present := captured["dimensions"]; present {
+		t.Errorf("dimensions should be omitted for zero EmbeddingDimensions, got %#v", captured)
+	}
+}
+
+func TestEmbedBatchDimensionsSet(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{0.1}, "index": 0},
+				{"embedding": []float64{0.2}, "index": 1},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newEmbedClient(t, srv.URL, Extension{EmbeddingDimensions: 1024})
+	if _, err := c.EmbedBatch(context.Background(), []string{"a", "b"}); err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	got, ok := captured["dimensions"]
+	if !ok {
+		t.Fatalf("dimensions missing from request body: %#v", captured)
+	}
+	if got.(float64) != 1024 {
+		t.Errorf("dimensions = %v, want 1024", got)
+	}
+}
+
+// foreignExtension is a ProviderExtension whose ProviderName is not "openai".
+type foreignExtension struct{}
+
+func (foreignExtension) ProviderName() string { return "not-openai" }
+
+func TestEmbedIgnoresForeignExtension(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// A foreign extension alongside a valid OpenAI one — only the OpenAI
+	// one should take effect; the foreign extension is ignored.
+	c := newEmbedClient(t, srv.URL,
+		foreignExtension{},
+		Extension{EmbeddingDimensions: 512},
+	)
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	got, ok := captured["dimensions"]
+	if !ok {
+		t.Fatalf("dimensions missing from request body: %#v", captured)
+	}
+	if got.(float64) != 512 {
+		t.Errorf("dimensions = %v, want 512", got)
+	}
+}
+
+func TestEmbedPointerExtension(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// findExtension must accept *Extension as well as Extension.
+	ext := &Extension{EmbeddingDimensions: 768}
+	c := newEmbedClient(t, srv.URL, ext)
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	got, ok := captured["dimensions"]
+	if !ok {
+		t.Fatalf("dimensions missing from request body: %#v", captured)
+	}
+	if got.(float64) != 768 {
+		t.Errorf("dimensions = %v, want 768", got)
+	}
+}
+
 func TestCumulativeUsage(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
