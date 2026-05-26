@@ -281,12 +281,15 @@ type RetryConfig struct {
 // field falls through to the Options default.
 //
 // Fields that appear ONLY on Options (APIKey, Model, BaseURL,
-// CustomHeaders, Retry, RequestTimeout, HTTPClient, OnRetry)
+// CustomHeaders, Retry, RequestTimeout, HTTPClient, OnRetry, Extensions)
 // configure the client itself and cannot be overridden per-request.
 //
 // Fields that appear ONLY on ChatRequest (Tools, SystemPrompt,
 // Extensions, and others added in later tasks) are per-request —
-// they have no client-level default.
+// they have no client-level default. Note that Extensions exists on
+// both Options (client-level) and the various request types
+// (per-request): the Options form is used by methods that take plain
+// arguments (Embed, EmbedBatch) rather than a request struct.
 type Options struct {
 	APIKey        string
 	Model         string
@@ -330,6 +333,16 @@ type Options struct {
 	// dashboards, or rate-limit tracking. Hooks run synchronously on
 	// the request goroutine; keep them fast.
 	OnRetry func(RetryEvent)
+
+	// Extensions carries client-level provider-specific options. Use
+	// this for tunables that the unified Client API doesn't surface
+	// and that can't be attached to a per-request struct — most
+	// notably Embed and EmbedBatch, which take plain arguments rather
+	// than a request type. Providers read only extensions whose
+	// ProviderName matches their own and ignore the rest, so an
+	// extension intended for one provider is safe to pass alongside
+	// others.
+	Extensions []ProviderExtension
 }
 
 // WithDefaults returns a copy of Options with default values applied

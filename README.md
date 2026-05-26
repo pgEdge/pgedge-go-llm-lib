@@ -351,6 +351,32 @@ req = anthropic.WithToolCaching(req) // marks entire tools block as cacheable pr
 req = anthropic.WithExtendedThinking(req, 8000) // enable thinking with 8 000-token budget
 ```
 
+### OpenAI: embedding dimensions
+
+`text-embedding-3-small` and `text-embedding-3-large` support requesting a
+lower-dimensional vector via the `dimensions` parameter. Attach an
+`openai.Extension` to `llm.Options.Extensions` (client-level, because
+`Embed` / `EmbedBatch` take plain arguments rather than a request struct):
+
+```go
+import (
+    "github.com/pgEdge/pgedge-go-llm-lib/llm"
+    "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+)
+
+client, _ := llm.NewClient("openai", llm.Options{
+    APIKey: os.Getenv("OPENAI_API_KEY"),
+    Model:  "text-embedding-3-small",
+    Extensions: []llm.ProviderExtension{
+        openai.Extension{EmbeddingDimensions: 512},
+    },
+})
+vec, _ := client.Embed(ctx, "hello") // 512-dim vector
+```
+
+`EmbeddingDimensions: 0` (the zero value) omits the parameter entirely
+and the model returns its native vector size.
+
 ## Errors and Retries
 
 ```go
