@@ -7,20 +7,30 @@
 //
 //-------------------------------------------------------------------------
 
-// Package llm provides a unified Go interface for chatting with
-// multiple large-language-model providers (Anthropic, OpenAI, Gemini,
-// and Ollama) through a single Client interface.
+// Package llm provides a unified Go interface to multiple
+// large-language-model and embedding/rerank providers (Anthropic,
+// OpenAI, Gemini, Ollama, Voyage) through a single Client interface.
 //
 // Provider packages register themselves at import time via init().
-// Import either the convenience package llm/all (for all four built-in
-// providers) or individual provider packages, then call NewClient to
-// construct a client.
+// Import the convenience package llm/all (for all five built-in
+// providers) or individual provider packages, then call NewClient.
 //
-// The package surface includes streaming via Stream, tool calling via
-// Tool/ToolUse, multimodal images via ImageBlock/ImageURLBlock,
-// document input (e.g. PDFs) via DocumentBlock/DocumentURLBlock, JSON
-// mode via ResponseFormat, retries via RetryConfig, and observability
-// via OnRetry/Usage/Ping.
+// The Client surface covers:
+//   - Chat and streaming chat (Chat, ChatStream)
+//   - Text embeddings (Embed, EmbedBatch)
+//   - Multimodal embeddings (EmbedMultimodal)
+//   - Reranking (Rerank)
+//   - Model discovery with capability filtering (ListModels,
+//     ListModelsWithMetadata, WithCapabilities)
+//   - Connectivity check (Ping) and token-usage tracking (Usage)
+//
+// Methods unsupported by a given provider return ErrNotSupported
+// (wrapped in *ProviderError) — e.g. Anthropic returns ErrNotSupported
+// from Embed, and Voyage returns ErrNotSupported from Chat.
+//
+// Per-request provider-specific options are passed via
+// ProviderExtension implementations (e.g. anthropic.Extension,
+// voyage.Extension) in the request's Extensions slice.
 package llm
 
 import (
