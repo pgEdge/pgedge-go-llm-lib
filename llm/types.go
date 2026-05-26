@@ -599,3 +599,35 @@ type MultimodalEmbedRequest struct {
 	Inputs     []MultimodalInput
 	Extensions []ProviderExtension
 }
+
+// RerankRequest is the request body for Client.Rerank. TopK, when
+// non-nil, asks the provider to return at most the top-K most-relevant
+// documents. Providers that do not support reranking return
+// ErrNotSupported.
+type RerankRequest struct {
+	Query      string
+	Documents  []string
+	TopK       *int
+	Extensions []ProviderExtension
+}
+
+// RerankResult is one row of a rerank response. Index is the position
+// in the original RerankRequest.Documents slice. RelevanceScore is the
+// provider's relevance value (typically [0,1] but not strictly bounded).
+// Document is non-empty only when the provider returns documents in
+// its response (e.g. when ReturnDocuments was requested via a provider
+// extension).
+type RerankResult struct {
+	Index          int
+	RelevanceScore float64
+	Document       string
+}
+
+// RerankResponse is the body returned by Client.Rerank. Results are
+// ordered by descending RelevanceScore. Usage carries token accounting
+// where the provider reports it; PromptTokens / CompletionTokens are
+// usually zero for rerank.
+type RerankResponse struct {
+	Results []RerankResult
+	Usage   TokenUsage
+}
