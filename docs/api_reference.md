@@ -483,12 +483,14 @@ type ModelInfo struct {
 type ModelCapability string
 
 const (
-    ModelCapabilityChat       ModelCapability = "chat"
-    ModelCapabilityTools      ModelCapability = "tools"
-    ModelCapabilityVision     ModelCapability = "vision"
-    ModelCapabilityEmbeddings ModelCapability = "embeddings"
-    ModelCapabilityJSONMode   ModelCapability = "json_mode"
-    ModelCapabilityStreaming  ModelCapability = "streaming"
+    ModelCapabilityChat                 ModelCapability = "chat"
+    ModelCapabilityTools                ModelCapability = "tools"
+    ModelCapabilityVision               ModelCapability = "vision"
+    ModelCapabilityEmbeddings           ModelCapability = "embeddings"
+    ModelCapabilityJSONMode             ModelCapability = "json_mode"
+    ModelCapabilityStreaming            ModelCapability = "streaming"
+    ModelCapabilityMultimodalEmbeddings ModelCapability = "multimodal_embeddings"
+    ModelCapabilityReranking            ModelCapability = "reranking"
 )
 ```
 

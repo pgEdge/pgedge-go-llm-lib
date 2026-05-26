@@ -9,12 +9,13 @@ clustering, classification, and retrieval-augmented generation.
 The following table describes embedding support across
 providers:
 
-| Provider  | Embed | EmbedBatch | Batch Method      |
-|-----------|-------|------------|-------------------|
-| OpenAI    | Yes   | Yes        | Native batch API  |
-| Gemini    | Yes   | Yes        | Sequential calls  |
-| Ollama    | Yes   | Yes        | Sequential calls  |
-| Anthropic | No    | No         | Not supported     |
+| Provider  | Embed | EmbedBatch | Multimodal Embeddings | Batch Method      |
+|-----------|-------|------------|-----------------------|-------------------|
+| OpenAI    | Yes   | Yes        | No                    | Native batch API  |
+| Gemini    | Yes   | Yes        | No                    | Sequential calls  |
+| Ollama    | Yes   | Yes        | No                    | Sequential calls  |
+| Anthropic | No    | No         | No                    | Not supported     |
+| Voyage    | Yes   | Yes        | Yes                   | Native batch API  |
 
 Calling `Embed` or `EmbedBatch` on the Anthropic provider
 returns an `ErrNotSupported` error.
