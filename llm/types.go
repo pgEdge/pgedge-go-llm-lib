@@ -559,3 +559,43 @@ const (
 	ModelCapabilityMultimodalEmbeddings ModelCapability = "multimodal_embeddings"
 	ModelCapabilityReranking            ModelCapability = "reranking"
 )
+
+// MultimodalContentType identifies the kind of content in a
+// MultimodalContent value. The discriminator selects which of the
+// Text / ImageURL / ImageData fields is read; other fields are
+// ignored for that content item.
+type MultimodalContentType string
+
+const (
+	// MultimodalContentText is a UTF-8 text fragment in MultimodalContent.Text.
+	MultimodalContentText MultimodalContentType = "text"
+	// MultimodalContentImageURL is a remote image fetched from MultimodalContent.ImageURL.
+	MultimodalContentImageURL MultimodalContentType = "image_url"
+	// MultimodalContentImageData is an inline image in MultimodalContent.ImageData with MIME type in MultimodalContent.MIMEType.
+	MultimodalContentImageData MultimodalContentType = "image_base64"
+)
+
+// MultimodalContent is a single piece of content in a multimodal
+// embedding input. The Type field selects which of Text / ImageURL /
+// ImageData is read.
+type MultimodalContent struct {
+	Type      MultimodalContentType
+	Text      string
+	ImageURL  string
+	ImageData []byte
+	MIMEType  string
+}
+
+// MultimodalInput is one input to EmbedMultimodal. Each input
+// produces exactly one embedding vector; the order in
+// MultimodalEmbedRequest.Inputs is preserved in the returned slice.
+type MultimodalInput struct {
+	Content []MultimodalContent
+}
+
+// MultimodalEmbedRequest is the request body for Client.EmbedMultimodal.
+// Providers that do not support multimodal embeddings return ErrNotSupported.
+type MultimodalEmbedRequest struct {
+	Inputs     []MultimodalInput
+	Extensions []ProviderExtension
+}
