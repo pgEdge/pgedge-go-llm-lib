@@ -127,9 +127,12 @@ func pickModel(envVar, fallback string) string {
 
 // helloChat exercises a provider's Chat method with a minimal prompt.
 // On success the response must have at least one non-empty text block.
+// MaxTokens is generous because reasoning models (Gemini 2.5, etc.)
+// consume tokens for internal "thinking" before producing visible
+// output; a tight cap can leave the response empty.
 func helloChat(t *testing.T, c llm.Client) {
 	t.Helper()
-	maxTokens := 32
+	maxTokens := 256
 	resp, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{{
 			Role:    llm.RoleUser,
