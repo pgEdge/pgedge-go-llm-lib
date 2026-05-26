@@ -714,6 +714,16 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 	return result, nil
 }
 
+// ---------- Rerank ----------
+
+func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Gemini does not support reranking",
+		Provider: "gemini",
+	}
+}
+
 // ---------- ListModels ----------
 
 func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) ([]string, error) {

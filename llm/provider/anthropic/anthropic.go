@@ -648,6 +648,16 @@ func (c *client) EmbedBatch(_ context.Context, _ []string) ([][]float64, error) 
 	}
 }
 
+// ---------- Rerank ----------
+
+func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Anthropic does not support reranking",
+		Provider: "anthropic",
+	}
+}
+
 // ---------- ListModels ----------
 
 type anthropicModelsResponse struct {

@@ -128,3 +128,11 @@ func (f *fakeProvider) ResetUsage() {
 	defer f.mu.Unlock()
 	// fakeProvider doesn't track usage; nothing to reset.
 }
+
+func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "fake does not support reranking",
+		Provider: "fake",
+	}
+}

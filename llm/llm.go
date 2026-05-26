@@ -57,6 +57,12 @@ type Client interface {
 	// embeddings.
 	EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
 
+	// Rerank reorders a slice of documents by relevance to a query.
+	// Results are returned in descending RelevanceScore order. Returns
+	// ErrNotSupported for providers that do not support reranking
+	// (currently every provider except Voyage).
+	Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
+
 	// ListModels returns the names of user-facing models available from
 	// the provider. With no options, providers return their default
 	// catalogue (typically chat models for chat-first providers, and

@@ -1796,3 +1796,13 @@ func TestNewClientPlumbsOnRetryHook(t *testing.T) {
 		t.Errorf("OnRetry StatusCode = %d, want %d", got.StatusCode, http.StatusServiceUnavailable)
 	}
 }
+
+func TestRerankUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.Rerank(context.Background(), llm.RerankRequest{Query: "q", Documents: []string{"a"}})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}

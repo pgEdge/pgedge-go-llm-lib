@@ -787,6 +787,16 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 	return result, nil
 }
 
+// ---------- Rerank ----------
+
+func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "OpenAI does not support reranking",
+		Provider: "openai",
+	}
+}
+
 // ---------- ListModels ----------
 
 type openaiModelsResponse struct {
