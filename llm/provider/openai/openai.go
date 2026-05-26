@@ -812,24 +812,16 @@ var filterPrefixes = []string{
 	"code-search",
 }
 
-func (c *client) ListModels(ctx context.Context) ([]string, error) {
-	var resp openaiModelsResponse
-	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
-		c.baseURL+"/models", c.headers(), nil, &resp)
-	if err != nil && status == 0 {
+func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) ([]string, error) {
+	infos, err := c.ListModelsWithMetadata(ctx, opts...)
+	if err != nil {
 		return nil, err
 	}
-	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+	names := make([]string, len(infos))
+	for i, info := range infos {
+		names[i] = info.ID
 	}
-
-	var models []string
-	for _, m := range resp.Data {
-		if !shouldFilterModel(m.ID) {
-			models = append(models, m.ID)
-		}
-	}
-	return models, nil
+	return names, nil
 }
 
 func shouldFilterModel(id string) bool {
@@ -854,16 +846,29 @@ var openaiModelCapabilities = map[string][]llm.ModelCapability{
 	"text-embedding-": {llm.ModelCapabilityEmbeddings},
 }
 
-func (c *client) ListModelsWithMetadata(ctx context.Context) ([]llm.ModelInfo, error) {
-	names, err := c.ListModels(ctx)
-	if err != nil {
+func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
+	var resp openaiModelsResponse
+	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
+		c.baseURL+"/models", c.headers(), nil, &resp)
+	if err != nil && status == 0 {
 		return nil, err
 	}
-	out := make([]llm.ModelInfo, len(names))
-	for i, name := range names {
-		out[i] = llm.ModelInfo{ID: name, Capabilities: lookupOpenAICapabilities(name)}
+	if status < 200 || status >= 300 {
+		return nil, mapError(status, body)
 	}
-	return out, nil
+
+	var infos []llm.ModelInfo
+	for _, m := range resp.Data {
+		if !shouldFilterModel(m.ID) {
+			infos = append(infos, llm.ModelInfo{ID: m.ID, Capabilities: lookupOpenAICapabilities(m.ID)})
+		}
+	}
+
+	cfg := llm.ListModelsConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return llm.FilterModelInfos(infos, cfg), nil
 }
 
 func lookupOpenAICapabilities(modelID string) []llm.ModelCapability {

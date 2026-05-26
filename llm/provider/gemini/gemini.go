@@ -716,28 +716,16 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 
 // ---------- ListModels ----------
 
-func (c *client) ListModels(ctx context.Context) ([]string, error) {
-	url := fmt.Sprintf("%s/v1beta/models", c.baseURL)
-
-	var resp geminiModelsResponse
-	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
-		url, c.headers(), nil, &resp)
-	if err != nil && status == 0 {
+func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) ([]string, error) {
+	infos, err := c.ListModelsWithMetadata(ctx, opts...)
+	if err != nil {
 		return nil, err
 	}
-	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+	names := make([]string, len(infos))
+	for i, info := range infos {
+		names[i] = info.ID
 	}
-
-	var models []string
-	for _, m := range resp.Models {
-		if supportsGenerateContent(m.SupportedGenerationMethods) {
-			// Strip "models/" prefix.
-			name := strings.TrimPrefix(m.Name, "models/")
-			models = append(models, name)
-		}
-	}
-	return models, nil
+	return names, nil
 }
 
 func supportsGenerateContent(methods []string) bool {
@@ -759,16 +747,33 @@ var geminiModelCapabilities = map[string][]llm.ModelCapability{
 	"embedding-":       {llm.ModelCapabilityEmbeddings},
 }
 
-func (c *client) ListModelsWithMetadata(ctx context.Context) ([]llm.ModelInfo, error) {
-	names, err := c.ListModels(ctx)
-	if err != nil {
+func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
+	url := fmt.Sprintf("%s/v1beta/models", c.baseURL)
+
+	var resp geminiModelsResponse
+	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
+		url, c.headers(), nil, &resp)
+	if err != nil && status == 0 {
 		return nil, err
 	}
-	out := make([]llm.ModelInfo, len(names))
-	for i, name := range names {
-		out[i] = llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)}
+	if status < 200 || status >= 300 {
+		return nil, mapError(status, body)
 	}
-	return out, nil
+
+	var infos []llm.ModelInfo
+	for _, m := range resp.Models {
+		if supportsGenerateContent(m.SupportedGenerationMethods) {
+			// Strip "models/" prefix.
+			name := strings.TrimPrefix(m.Name, "models/")
+			infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})
+		}
+	}
+
+	cfg := llm.ListModelsConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return llm.FilterModelInfos(infos, cfg), nil
 }
 
 func lookupGeminiCapabilities(modelID string) []llm.ModelCapability {

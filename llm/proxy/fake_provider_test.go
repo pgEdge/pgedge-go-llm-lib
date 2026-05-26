@@ -88,7 +88,7 @@ func (f *fakeProvider) Embed(context.Context, string) ([]float64, error) {
 func (f *fakeProvider) EmbedBatch(context.Context, []string) ([][]float64, error) {
 	return nil, llm.ErrNotSupported
 }
-func (f *fakeProvider) ListModels(context.Context) ([]string, error) {
+func (f *fakeProvider) ListModels(_ context.Context, _ ...llm.ListModelsOption) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.listModelsErr != nil {
@@ -97,7 +97,7 @@ func (f *fakeProvider) ListModels(context.Context) ([]string, error) {
 	return f.models, nil
 }
 
-func (f *fakeProvider) ListModelsWithMetadata(context.Context) ([]llm.ModelInfo, error) {
+func (f *fakeProvider) ListModelsWithMetadata(_ context.Context, _ ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.listModelsErr != nil {

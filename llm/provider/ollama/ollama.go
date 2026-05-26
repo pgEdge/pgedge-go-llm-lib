@@ -677,7 +677,21 @@ type ollamaModelInfo struct {
 	Name string `json:"name"`
 }
 
-func (c *client) ListModels(ctx context.Context) ([]string, error) {
+func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) ([]string, error) {
+	infos, err := c.ListModelsWithMetadata(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(infos))
+	for i, info := range infos {
+		names[i] = info.ID
+	}
+	return names, nil
+}
+
+// ---------- ListModelsWithMetadata ----------
+
+func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
 	var resp ollamaTagsResponse
 	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodGet,
 		c.baseURL+"/api/tags", c.headers(), nil, &resp)
@@ -688,32 +702,23 @@ func (c *client) ListModels(ctx context.Context) ([]string, error) {
 		return nil, mapError(status, body)
 	}
 
-	models := make([]string, len(resp.Models))
+	infos := make([]llm.ModelInfo, len(resp.Models))
 	for i, m := range resp.Models {
-		models[i] = m.Name
-	}
-	return models, nil
-}
-
-// ---------- ListModelsWithMetadata ----------
-
-func (c *client) ListModelsWithMetadata(ctx context.Context) ([]llm.ModelInfo, error) {
-	names, err := c.ListModels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]llm.ModelInfo, len(names))
-	for i, name := range names {
 		// Ollama models are user-installed; no static capability map.
 		// Mark Chat + Streaming as the safe default. Specific capability
 		// detection (vision, embeddings) would require querying Ollama's
 		// /api/show endpoint, which is out of scope here.
-		out[i] = llm.ModelInfo{
-			ID:           name,
+		infos[i] = llm.ModelInfo{
+			ID:           m.Name,
 			Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat, llm.ModelCapabilityStreaming},
 		}
 	}
-	return out, nil
+
+	cfg := llm.ListModelsConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return llm.FilterModelInfos(infos, cfg), nil
 }
 
 // ---------- Error mapping ----------

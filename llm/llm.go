@@ -57,16 +57,18 @@ type Client interface {
 	// embeddings.
 	EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
 
-	// ListModels returns the names of chat-capable models available
-	// from the provider. Each provider filters its list to relevant
-	// models only.
-	ListModels(ctx context.Context) ([]string, error)
+	// ListModels returns the names of user-facing models available from
+	// the provider. With no options, providers return their default
+	// catalogue (typically chat models for chat-first providers, and
+	// embedding/rerank models for embedding-first providers). Pass
+	// WithCapabilities to filter by ModelCapability.
+	ListModels(ctx context.Context, opts ...ListModelsOption) ([]string, error)
 
 	// ListModelsWithMetadata returns ModelInfo for each available
 	// model, including context-window size, max output, capabilities,
 	// and deprecation status. Fields are best-effort; providers
 	// populate what their APIs expose.
-	ListModelsWithMetadata(ctx context.Context) ([]ModelInfo, error)
+	ListModelsWithMetadata(ctx context.Context, opts ...ListModelsOption) ([]ModelInfo, error)
 
 	// Ping checks provider connectivity with a lightweight request
 	// (typically a HEAD or models-list call). Returns nil if the
