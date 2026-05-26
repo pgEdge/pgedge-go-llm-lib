@@ -270,6 +270,15 @@ func (c *client) embed(ctx context.Context, texts []string, model string, ext *E
 		}
 		out[d.Index] = d.Embedding
 	}
+	for i, v := range out {
+		if len(v) == 0 {
+			return nil, &llm.ProviderError{
+				Err:      llm.ErrProviderError,
+				Message:  fmt.Sprintf("missing embedding at index %d", i),
+				Provider: providerName,
+			}
+		}
+	}
 	c.addUsage(llm.TokenUsage{TotalTokens: resp.Usage.TotalTokens})
 	return out, nil
 }
@@ -302,7 +311,11 @@ func (c *client) EmbedMultimodal(ctx context.Context, req llm.MultimodalEmbedReq
 	for i, in := range req.Inputs {
 		wireContent := make([]multimodalContentWire, len(in.Content))
 		for j, mc := range in.Content {
-			wireContent[j] = contentToWire(mc)
+			w, err := contentToWire(mc)
+			if err != nil {
+				return nil, err
+			}
+			wireContent[j] = w
 		}
 		wireInputs[i] = multimodalInputWire{Content: wireContent}
 	}
@@ -324,20 +337,33 @@ func (c *client) EmbedMultimodal(ctx context.Context, req llm.MultimodalEmbedReq
 		}
 		out[d.Index] = d.Embedding
 	}
+	for i, v := range out {
+		if len(v) == 0 {
+			return nil, &llm.ProviderError{
+				Err:      llm.ErrProviderError,
+				Message:  fmt.Sprintf("missing embedding at index %d", i),
+				Provider: providerName,
+			}
+		}
+	}
 	c.addUsage(llm.TokenUsage{TotalTokens: resp.Usage.TotalTokens})
 	return out, nil
 }
 
-func contentToWire(mc llm.MultimodalContent) multimodalContentWire {
+func contentToWire(mc llm.MultimodalContent) (multimodalContentWire, error) {
 	switch mc.Type {
 	case llm.MultimodalContentText:
-		return multimodalContentWire{Type: "text", Text: mc.Text}
+		return multimodalContentWire{Type: "text", Text: mc.Text}, nil
 	case llm.MultimodalContentImageURL:
-		return multimodalContentWire{Type: "image_url", ImageURL: mc.ImageURL}
+		return multimodalContentWire{Type: "image_url", ImageURL: mc.ImageURL}, nil
 	case llm.MultimodalContentImageData:
-		return multimodalContentWire{Type: "image_base64", ImageBase64: base64.StdEncoding.EncodeToString(mc.ImageData)}
+		return multimodalContentWire{Type: "image_base64", ImageBase64: base64.StdEncoding.EncodeToString(mc.ImageData)}, nil
 	default:
-		return multimodalContentWire{}
+		return multimodalContentWire{}, &llm.ProviderError{
+			Err:      llm.ErrInvalidRequest,
+			Message:  fmt.Sprintf("unsupported multimodal content type %q", mc.Type),
+			Provider: providerName,
+		}
 	}
 }
 
