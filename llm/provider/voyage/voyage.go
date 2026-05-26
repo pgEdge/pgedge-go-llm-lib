@@ -12,6 +12,7 @@ package voyage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -203,20 +204,71 @@ func voyageCatalog() []llm.ModelInfo {
 	}
 }
 
-// embed, Embed, EmbedBatch, EmbedMultimodal, Rerank are filled in by
-// later tasks. The stubs below keep the package compiling so the
-// skeleton's tests can run.
+// ---------- Embed / EmbedBatch ----------
 
-func (c *client) embed(_ context.Context, _ []string, _ string, _ *Extension) ([][]float64, error) {
-	return nil, &llm.ProviderError{Err: llm.ErrNotSupported, Message: "voyage: embed not implemented yet", Provider: providerName}
+type embeddingsRequest struct {
+	Input           []string `json:"input"`
+	Model           string   `json:"model"`
+	InputType       string   `json:"input_type,omitempty"`
+	Truncation      *bool    `json:"truncation,omitempty"`
+	OutputDimension int      `json:"output_dimension,omitempty"`
+	OutputDtype     string   `json:"output_dtype,omitempty"`
 }
 
-func (c *client) Embed(_ context.Context, _ string) ([]float64, error) {
-	return nil, &llm.ProviderError{Err: llm.ErrNotSupported, Message: "voyage: Embed not implemented yet", Provider: providerName}
+type embeddingsResponseDatum struct {
+	Embedding []float64 `json:"embedding"`
+	Index     int       `json:"index"`
 }
 
-func (c *client) EmbedBatch(_ context.Context, _ []string) ([][]float64, error) {
-	return nil, &llm.ProviderError{Err: llm.ErrNotSupported, Message: "voyage: EmbedBatch not implemented yet", Provider: providerName}
+type embeddingsResponse struct {
+	Data  []embeddingsResponseDatum `json:"data"`
+	Model string                    `json:"model"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
+	vecs, err := c.embed(ctx, []string{text}, c.model, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(vecs) == 0 {
+		return nil, &llm.ProviderError{Err: llm.ErrProviderError, Message: "empty embedding response", Provider: providerName}
+	}
+	return vecs[0], nil
+}
+
+func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, error) {
+	return c.embed(ctx, texts, c.model, nil)
+}
+
+func (c *client) embed(ctx context.Context, texts []string, model string, ext *Extension) ([][]float64, error) {
+	if model == "" {
+		return nil, &llm.ProviderError{
+			Err: llm.ErrInvalidRequest, Message: "Voyage requires Options.Model", Provider: providerName,
+		}
+	}
+	req := embeddingsRequest{Input: texts, Model: model}
+	if ext != nil {
+		req.InputType = string(ext.InputType)
+		req.Truncation = ext.Truncation
+		req.OutputDimension = ext.OutputDimension
+		req.OutputDtype = string(ext.OutputDtype)
+	}
+	var resp embeddingsResponse
+	if err := c.postJSON(ctx, "/embeddings", req, &resp); err != nil {
+		return nil, err
+	}
+	out := make([][]float64, len(texts))
+	for _, d := range resp.Data {
+		if d.Index < 0 || d.Index >= len(out) {
+			return nil, &llm.ProviderError{Err: llm.ErrProviderError, Message: "embedding index out of range", Provider: providerName}
+		}
+		out[d.Index] = d.Embedding
+	}
+	c.addUsage(llm.TokenUsage{TotalTokens: resp.Usage.TotalTokens})
+	return out, nil
 }
 
 func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
@@ -225,6 +277,41 @@ func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest
 
 func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
 	return nil, &llm.ProviderError{Err: llm.ErrNotSupported, Message: "voyage: Rerank not implemented yet", Provider: providerName}
+}
+
+// ---------- HTTP helpers ----------
+
+func (c *client) postJSON(ctx context.Context, path string, body, out any) error {
+	headers := map[string]string{
+		"Authorization": "Bearer " + c.apiKey,
+		"Content-Type":  "application/json",
+	}
+	status, respBody, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost, c.baseURL+path, headers, body, out)
+	if err != nil {
+		return &llm.ProviderError{Err: llm.ErrProviderError, Message: err.Error(), Provider: providerName, StatusCode: status}
+	}
+	if status < 200 || status >= 300 {
+		return &llm.ProviderError{
+			Err:        statusToErr(status),
+			Message:    fmt.Sprintf("voyage: HTTP %d: %s", status, string(respBody)),
+			Provider:   providerName,
+			StatusCode: status,
+		}
+	}
+	return nil
+}
+
+func statusToErr(status int) error {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return llm.ErrAuthentication
+	case status == http.StatusTooManyRequests:
+		return llm.ErrRateLimit
+	case status == http.StatusBadRequest:
+		return llm.ErrInvalidRequest
+	default:
+		return llm.ErrProviderError
+	}
 }
 
 // findExtension locates a voyage.Extension in a generic
