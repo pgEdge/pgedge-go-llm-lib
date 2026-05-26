@@ -697,6 +697,19 @@ type ollamaModelInfo struct {
 	Name string `json:"name"`
 }
 
+// ollamaShowRequest is the request body for Ollama's /api/show endpoint.
+type ollamaShowRequest struct {
+	Name string `json:"name"`
+}
+
+// ollamaShowResponse is the response from Ollama's /api/show endpoint.
+// Only the fields relevant to capability detection are included.
+type ollamaShowResponse struct {
+	// Capabilities is populated by Ollama ≥ 0.3; older versions omit it.
+	// Example values: "completion", "embedding", "tools", "vision".
+	Capabilities []string `json:"capabilities"`
+}
+
 func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) ([]string, error) {
 	infos, err := c.ListModelsWithMetadata(ctx, opts...)
 	if err != nil {
@@ -724,13 +737,10 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 
 	infos := make([]llm.ModelInfo, len(resp.Models))
 	for i, m := range resp.Models {
-		// Ollama models are user-installed; no static capability map.
-		// Mark Chat + Streaming as the safe default. Specific capability
-		// detection (vision, embeddings) would require querying Ollama's
-		// /api/show endpoint, which is out of scope here.
+		caps := c.capabilitiesForModel(ctx, m.Name)
 		infos[i] = llm.ModelInfo{
 			ID:           m.Name,
-			Capabilities: []llm.ModelCapability{llm.ModelCapabilityChat, llm.ModelCapabilityStreaming},
+			Capabilities: caps,
 		}
 	}
 
@@ -739,6 +749,56 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 		opt(&cfg)
 	}
 	return llm.FilterModelInfos(infos, cfg), nil
+}
+
+// capabilitiesForModel queries /api/show for the given model name and maps
+// Ollama's capability strings to llm.ModelCapability values.
+//
+// If /api/show is unavailable or returns an empty capabilities list (older
+// Ollama versions that predate the field), the function falls back to
+// [Chat, Streaming] as a safe default for backward compatibility.
+//
+// For models that advertise "completion", Chat and Streaming are added.
+// For models that advertise "embedding" without "completion", only
+// ModelCapabilityEmbeddings is returned — chat capabilities are not
+// appropriate for embedding-only models.
+func (c *client) capabilitiesForModel(ctx context.Context, name string) []llm.ModelCapability {
+	var showResp ollamaShowResponse
+	status, _, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
+		c.baseURL+"/api/show", c.headers(), ollamaShowRequest{Name: name}, &showResp)
+	if err != nil || status < 200 || status >= 300 || len(showResp.Capabilities) == 0 {
+		// Fall back to the safe default for older Ollama instances or errors.
+		return []llm.ModelCapability{llm.ModelCapabilityChat, llm.ModelCapabilityStreaming}
+	}
+
+	var caps []llm.ModelCapability
+	hasCompletion := false
+	for _, cap := range showResp.Capabilities {
+		switch cap {
+		case "completion":
+			hasCompletion = true
+			caps = append(caps, llm.ModelCapabilityChat, llm.ModelCapabilityStreaming)
+		case "embedding":
+			caps = append(caps, llm.ModelCapabilityEmbeddings)
+		case "tools":
+			caps = append(caps, llm.ModelCapabilityTools)
+		case "vision":
+			caps = append(caps, llm.ModelCapabilityVision)
+		}
+	}
+
+	// If no recognized capabilities were extracted but the response was non-empty,
+	// fall back to Chat+Streaming to avoid returning an empty slice for unknown
+	// future capability strings.
+	if len(caps) == 0 {
+		return []llm.ModelCapability{llm.ModelCapabilityChat, llm.ModelCapabilityStreaming}
+	}
+
+	// If the model only advertised "embedding" (no "completion"), do NOT add
+	// chat/streaming defaults — embedding-only models should not appear when
+	// callers filter for chat-capable models.
+	_ = hasCompletion
+	return caps
 }
 
 // ---------- Error mapping ----------
