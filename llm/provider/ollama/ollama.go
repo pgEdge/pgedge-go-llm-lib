@@ -622,8 +622,25 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 // ---------- Embed ----------
 
 type ollamaEmbedRequest struct {
-	Model string `json:"model"`
-	Input string `json:"input"`
+	Model   string         `json:"model"`
+	Input   string         `json:"input"`
+	Options map[string]any `json:"options,omitempty"`
+}
+
+// embedOptions returns Ollama's per-request "options" map populated
+// from any ollama.Extension on the client. Returns nil when no
+// extension is present or all knobs are at their zero value so the
+// "options" object is omitted from the wire body entirely.
+func (c *client) embedOptions() map[string]any {
+	ext := findExtension(c.opts.Extensions)
+	if ext == nil {
+		return nil
+	}
+	var opts map[string]any
+	if ext.EmbedContextLength > 0 {
+		opts = map[string]any{"num_ctx": ext.EmbedContextLength}
+	}
+	return opts
 }
 
 type ollamaEmbedResponse struct {
@@ -667,8 +684,9 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 // so the caller can inspect it for truncate-retry eligibility.
 func (c *client) embedOnce(ctx context.Context, text string) ([]float64, int, []byte, error) {
 	reqBody := ollamaEmbedRequest{
-		Model: c.model,
-		Input: text,
+		Model:   c.model,
+		Input:   text,
+		Options: c.embedOptions(),
 	}
 
 	var resp ollamaEmbedResponse

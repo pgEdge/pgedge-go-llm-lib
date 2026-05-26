@@ -20,6 +20,15 @@ import (
 // (client-level); the Ollama provider reads it on each Embed and
 // EmbedBatch call. Other providers ignore it.
 type Extension struct {
+	// EmbedContextLength, when non-zero, sets Ollama's "num_ctx" on
+	// /api/embed requests. Use this to raise the model's context
+	// window beyond its compiled default when chunks routinely exceed
+	// it (e.g. nomic-embed-text ships with a 2048-token default and
+	// rejects longer inputs with "the input length exceeds the
+	// context length"). Zero (the default) omits "num_ctx" from the
+	// request body and Ollama uses the model's default.
+	EmbedContextLength int
+
 	// EmbedTruncateOnOverflow, when true, makes Embed and EmbedBatch
 	// retry a request whose input exceeded the model's context window
 	// (or crashed Ollama's model runner with HTTP 500) at progressively
