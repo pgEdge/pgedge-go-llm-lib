@@ -772,11 +772,9 @@ func (c *client) capabilitiesForModel(ctx context.Context, name string) []llm.Mo
 	}
 
 	var caps []llm.ModelCapability
-	hasCompletion := false
 	for _, cap := range showResp.Capabilities {
 		switch cap {
 		case "completion":
-			hasCompletion = true
 			caps = append(caps, llm.ModelCapabilityChat, llm.ModelCapabilityStreaming)
 		case "embedding":
 			caps = append(caps, llm.ModelCapabilityEmbeddings)
@@ -797,7 +795,6 @@ func (c *client) capabilitiesForModel(ctx context.Context, name string) []llm.Mo
 	// If the model only advertised "embedding" (no "completion"), do NOT add
 	// chat/streaming defaults — embedding-only models should not appear when
 	// callers filter for chat-capable models.
-	_ = hasCompletion
 	return caps
 }
 
