@@ -215,6 +215,7 @@ func encodeJSON(w io.Writer, v any) error {
 //	GET  /v1/models           — list model names for a provider
 //	POST /v1/chat             — non-streaming chat completion
 //	POST /v1/chat/stream      — streaming chat (SSE)
+//	POST /v1/embed            — text embeddings (single or batch)
 func New(cfg Config) *Proxy {
 	providers := make(map[string]llm.Options, len(cfg.Providers))
 	for k, v := range cfg.Providers {
@@ -235,6 +236,7 @@ func (p *Proxy) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/models", p.handleModels)
 	mux.HandleFunc("POST /v1/chat", p.handleChat)
 	mux.HandleFunc("POST /v1/chat/stream", p.handleChatStream)
+	mux.HandleFunc("POST /v1/embed", p.handleEmbed)
 	return mux
 }
 

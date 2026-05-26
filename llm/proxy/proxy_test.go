@@ -1306,6 +1306,49 @@ func TestHookRequestAndResponseExposePayloads(t *testing.T) {
 	}
 }
 
+func TestEmbedHappyPath(t *testing.T) {
+	setFake(&fakeProvider{
+		embedVec: [][]float64{{0.1, 0.2}},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	body := bytes.NewReader([]byte(`{"provider":"fake","input":["hello"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed", body)
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Embeddings [][]float64 `json:"embeddings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Embeddings) != 1 || resp.Embeddings[0][0] != 0.1 {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestEmbedUnsupported(t *testing.T) {
+	setFake(&fakeProvider{
+		embedErr: &llm.ProviderError{Err: llm.ErrNotSupported, Message: "fake says no", Provider: "fake"},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed",
+		bytes.NewReader([]byte(`{"provider":"fake","input":["x"]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", rec.Code)
+	}
+}
+
 func TestHookStreamingResponseAssembledFromChunks(t *testing.T) {
 	// The streaming OnResponse receives a *ChatResponse assembled from
 	// SSE chunks — text deltas concatenated, tool-use deltas folded

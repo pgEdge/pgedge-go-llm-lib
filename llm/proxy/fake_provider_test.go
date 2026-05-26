@@ -36,6 +36,8 @@ type fakeProvider struct {
 	streamFn      func(context.Context, llm.ChatRequest) (*llm.Stream, error)
 	listModelsErr error // when set, ListModels and ListModelsWithMetadata return this error
 	pingErr       error // when set, Ping returns this error
+	embedVec      [][]float64 // when set, Embed/EmbedBatch return this
+	embedErr      error       // when set, Embed/EmbedBatch return this error
 }
 
 var (
@@ -82,10 +84,27 @@ func (f *fakeProvider) ChatStream(ctx context.Context, req llm.ChatRequest) (*ll
 	return nil, llm.ErrNotSupported
 }
 
-func (f *fakeProvider) Embed(context.Context, string) ([]float64, error) {
+func (f *fakeProvider) Embed(_ context.Context, text string) ([]float64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.embedErr != nil {
+		return nil, f.embedErr
+	}
+	if len(f.embedVec) > 0 {
+		return f.embedVec[0], nil
+	}
 	return nil, llm.ErrNotSupported
 }
-func (f *fakeProvider) EmbedBatch(context.Context, []string) ([][]float64, error) {
+
+func (f *fakeProvider) EmbedBatch(_ context.Context, _ []string) ([][]float64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.embedErr != nil {
+		return nil, f.embedErr
+	}
+	if f.embedVec != nil {
+		return f.embedVec, nil
+	}
 	return nil, llm.ErrNotSupported
 }
 func (f *fakeProvider) ListModels(_ context.Context, _ ...llm.ListModelsOption) ([]string, error) {

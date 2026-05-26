@@ -12,6 +12,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -381,5 +382,51 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			Err:        streamErr,
 			RequestID:  reqID,
 		})
+	}
+}
+
+func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
+	r, reqID := p.ensureRequestID(r)
+	if reqID != "" {
+		w.Header().Set(p.requestIDHeaderName(), reqID)
+	}
+	if !p.authorize(w, r) {
+		return
+	}
+	var req EmbedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = p.cfg.DefaultProvider
+	}
+	opts, ok := p.cfg.Providers[provider]
+	if !ok {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest,
+			Err: fmt.Errorf("provider %q is not configured", provider), RequestID: reqID})
+		return
+	}
+	if req.Model != "" {
+		opts.Model = req.Model
+	}
+	client, err := llm.NewClient(provider, opts)
+	if err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+		return
+	}
+	vecs, err := client.EmbedBatch(r.Context(), req.Input)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, llm.ErrNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := encodeJSON(w, EmbedResponse{Embeddings: vecs}); err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
 	}
 }

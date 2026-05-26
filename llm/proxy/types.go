@@ -86,6 +86,20 @@ type ProviderHealth struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// EmbedRequest is the JSON body of POST /v1/embed. Input may contain
+// one or many strings; the proxy chooses Embed vs EmbedBatch
+// accordingly.
+type EmbedRequest struct {
+	Provider string   `json:"provider,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	Input    []string `json:"input"`
+}
+
+// EmbedResponse is the JSON body returned by POST /v1/embed.
+type EmbedResponse struct {
+	Embeddings [][]float64 `json:"embeddings"`
+}
+
 // ErrorResponse is the wire shape for any non-streaming error.
 type ErrorResponse struct {
 	Error string `json:"error"`
