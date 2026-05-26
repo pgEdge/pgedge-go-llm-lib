@@ -339,8 +339,49 @@ func contentToWire(mc llm.MultimodalContent) multimodalContentWire {
 	}
 }
 
-func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
-	return nil, &llm.ProviderError{Err: llm.ErrNotSupported, Message: "voyage: Rerank not implemented yet", Provider: providerName}
+type rerankRequestWire struct {
+	Query           string   `json:"query"`
+	Documents       []string `json:"documents"`
+	Model           string   `json:"model"`
+	TopK            *int     `json:"top_k,omitempty"`
+	ReturnDocuments *bool    `json:"return_documents,omitempty"`
+	Truncation      *bool    `json:"truncation,omitempty"`
+}
+
+type rerankResponseWire struct {
+	Data []struct {
+		Index          int     `json:"index"`
+		RelevanceScore float64 `json:"relevance_score"`
+		Document       string  `json:"document,omitempty"`
+	} `json:"data"`
+	Model string `json:"model"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+func (c *client) Rerank(ctx context.Context, req llm.RerankRequest) (*llm.RerankResponse, error) {
+	if c.model == "" {
+		return nil, &llm.ProviderError{Err: llm.ErrInvalidRequest, Message: "Voyage requires Options.Model", Provider: providerName}
+	}
+	wire := rerankRequestWire{Query: req.Query, Documents: req.Documents, Model: c.model, TopK: req.TopK}
+	if ext := findExtension(req.Extensions); ext != nil {
+		wire.ReturnDocuments = ext.ReturnDocuments
+		wire.Truncation = ext.Truncation
+	}
+	var raw rerankResponseWire
+	if err := c.postJSON(ctx, "/rerank", wire, &raw); err != nil {
+		return nil, err
+	}
+	out := &llm.RerankResponse{
+		Results: make([]llm.RerankResult, len(raw.Data)),
+		Usage:   llm.TokenUsage{TotalTokens: raw.Usage.TotalTokens},
+	}
+	for i, d := range raw.Data {
+		out.Results[i] = llm.RerankResult{Index: d.Index, RelevanceScore: d.RelevanceScore, Document: d.Document}
+	}
+	c.addUsage(out.Usage)
+	return out, nil
 }
 
 // ---------- HTTP helpers ----------

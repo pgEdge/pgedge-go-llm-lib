@@ -281,3 +281,83 @@ func TestEmbedMultimodalExtensionRoundtrip(t *testing.T) {
 		t.Errorf("output_dimension = %v", captured["output_dimension"])
 	}
 }
+
+func TestRerankHappyPath(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rerank" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+            "data":[
+                {"index":2,"relevance_score":0.9},
+                {"index":0,"relevance_score":0.7},
+                {"index":1,"relevance_score":0.3}
+            ],
+            "model":"rerank-2.5",
+            "usage":{"total_tokens":42}
+        }`))
+	})
+	res, err := c.Rerank(context.Background(), llm.RerankRequest{
+		Query:     "kittens",
+		Documents: []string{"alpha", "beta", "gamma"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Results) != 3 {
+		t.Fatalf("got %d results", len(res.Results))
+	}
+	if res.Results[0].Index != 2 || res.Results[0].RelevanceScore != 0.9 {
+		t.Errorf("top result wrong: %+v", res.Results[0])
+	}
+	if res.Usage.TotalTokens != 42 {
+		t.Errorf("usage TotalTokens = %d", res.Usage.TotalTokens)
+	}
+}
+
+func TestRerankReturnDocuments(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+            "data":[
+                {"index":0,"relevance_score":0.9,"document":"alpha"}
+            ],
+            "model":"rerank-2.5",
+            "usage":{"total_tokens":5}
+        }`))
+	})
+	tru := true
+	res, err := c.Rerank(context.Background(), llm.RerankRequest{
+		Query:     "q",
+		Documents: []string{"alpha"},
+		Extensions: []llm.ProviderExtension{voyage.Extension{
+			ReturnDocuments: &tru,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Results[0].Document != "alpha" {
+		t.Errorf("expected document populated, got %q", res.Results[0].Document)
+	}
+}
+
+func TestRerankTopK(t *testing.T) {
+	var captured map[string]any
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[],"model":"rerank-2.5","usage":{"total_tokens":0}}`))
+	})
+	k := 5
+	_, err := c.Rerank(context.Background(), llm.RerankRequest{
+		Query: "q", Documents: []string{"a"}, TopK: &k,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured["top_k"].(float64) != 5 {
+		t.Errorf("top_k = %v, want 5", captured["top_k"])
+	}
+}
