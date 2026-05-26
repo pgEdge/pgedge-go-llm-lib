@@ -11,6 +11,7 @@
 package ollama
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -630,6 +631,41 @@ type ollamaEmbedResponse struct {
 }
 
 func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
+	emb, status, body, err := c.embedOnce(ctx, text)
+	if err == nil {
+		return emb, nil
+	}
+
+	ext := findExtension(c.opts.Extensions)
+	if ext == nil || !ext.EmbedTruncateOnOverflow {
+		return nil, err
+	}
+	if !shouldRetryWithTruncation(status, body) {
+		return nil, err
+	}
+
+	// Three retries at progressively smaller fractions of the
+	// original input, cut at a word boundary. If all three fail the
+	// original (full-text) error is returned per the spec — the
+	// truncated errors are intentionally discarded since they are
+	// less informative.
+	for _, frac := range []float64{0.75, 0.50, 0.25} {
+		truncated := truncateAtWordBoundary(text, frac)
+		if truncated == "" || truncated == text {
+			continue
+		}
+		if emb, _, _, retryErr := c.embedOnce(ctx, truncated); retryErr == nil {
+			return emb, nil
+		}
+	}
+	return nil, err
+}
+
+// embedOnce performs one /api/embed call without retry. status is 0
+// when the request never reached the server (network error); body is
+// nil in that case. On non-2xx responses body is the raw response body
+// so the caller can inspect it for truncate-retry eligibility.
+func (c *client) embedOnce(ctx context.Context, text string) ([]float64, int, []byte, error) {
 	reqBody := ollamaEmbedRequest{
 		Model: c.model,
 		Input: text,
@@ -639,20 +675,57 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/api/embed", c.headers(), reqBody, &resp)
 	if err != nil && status == 0 {
-		return nil, err
+		return nil, 0, nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, status, body, mapError(status, body)
 	}
 
 	if len(resp.Embeddings) == 0 {
-		return nil, &llm.ProviderError{
+		return nil, status, body, &llm.ProviderError{
 			Err:      llm.ErrProviderError,
 			Message:  "no embedding data returned",
 			Provider: providerName,
 		}
 	}
-	return resp.Embeddings[0], nil
+	return resp.Embeddings[0], status, body, nil
+}
+
+// shouldRetryWithTruncation reports whether a failed /api/embed call
+// is a candidate for truncation retry. The two known-deterministic
+// failure modes are HTTP 500 (model-runner crash) and any status
+// whose body contains Ollama's context-overflow message.
+func shouldRetryWithTruncation(status int, body []byte) bool {
+	if status == http.StatusInternalServerError {
+		return true
+	}
+	return bytes.Contains(body, []byte("the input length exceeds the context length"))
+}
+
+// truncateAtWordBoundary returns text cut at a word boundary near
+// fraction * len(text) bytes. It walks backwards from the target byte
+// offset to the previous ASCII space and cuts there (excluding the
+// space). If no space is found between the start and the target, it
+// falls back to a hard byte cut at the target so each retry makes
+// progress on inputs that contain no spaces.
+//
+// Returns "" when the target is at or below zero (text is too short
+// for the fraction to leave any content), signalling the caller to
+// skip this retry.
+func truncateAtWordBoundary(text string, fraction float64) string {
+	target := int(float64(len(text)) * fraction)
+	if target <= 0 {
+		return ""
+	}
+	if target >= len(text) {
+		return text
+	}
+	for i := target; i > 0; i-- {
+		if text[i] == ' ' {
+			return text[:i]
+		}
+	}
+	return text[:target]
 }
 
 func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, error) {
