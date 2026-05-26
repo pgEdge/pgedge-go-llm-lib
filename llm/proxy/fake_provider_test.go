@@ -38,6 +38,8 @@ type fakeProvider struct {
 	pingErr       error       // when set, Ping returns this error
 	embedVec      [][]float64 // when set, Embed/EmbedBatch return this
 	embedErr      error       // when set, Embed/EmbedBatch return this error
+	multimodalVec [][]float64 // when set, EmbedMultimodal returns this
+	multimodalErr error       // when set, EmbedMultimodal returns this error
 }
 
 var (
@@ -157,6 +159,14 @@ func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.Rera
 }
 
 func (f *fakeProvider) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.multimodalErr != nil {
+		return nil, f.multimodalErr
+	}
+	if f.multimodalVec != nil {
+		return f.multimodalVec, nil
+	}
 	return nil, &llm.ProviderError{
 		Err:      llm.ErrNotSupported,
 		Message:  "fake does not support multimodal embeddings",

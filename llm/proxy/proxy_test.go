@@ -1349,6 +1349,49 @@ func TestEmbedUnsupported(t *testing.T) {
 	}
 }
 
+func TestEmbedMultimodalHappyPath(t *testing.T) {
+	setFake(&fakeProvider{
+		multimodalVec: [][]float64{{0.5, 0.6}},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	body := bytes.NewReader([]byte(`{"provider":"fake","inputs":[{"content":[{"type":"text","text":"hi"}]}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal", body)
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Embeddings [][]float64 `json:"embeddings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Embeddings) != 1 || resp.Embeddings[0][0] != 0.5 {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestEmbedMultimodalUnsupportedReturns501(t *testing.T) {
+	setFake(&fakeProvider{
+		multimodalErr: &llm.ProviderError{Err: llm.ErrNotSupported, Message: "no", Provider: "fake"},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal",
+		bytes.NewReader([]byte(`{"provider":"fake","inputs":[]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", rec.Code)
+	}
+}
+
 func TestHookStreamingResponseAssembledFromChunks(t *testing.T) {
 	// The streaming OnResponse receives a *ChatResponse assembled from
 	// SSE chunks — text deltas concatenated, tool-use deltas folded

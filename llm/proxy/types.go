@@ -100,6 +100,36 @@ type EmbedResponse struct {
 	Embeddings [][]float64 `json:"embeddings"`
 }
 
+// MultimodalContentRequest describes one content item within a
+// multimodal embedding input. Type is required; the remaining fields
+// are type-dependent (text for "text", image_url / image_base64 /
+// mime_type for image types).
+type MultimodalContentRequest struct {
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	ImageBase64 string `json:"image_base64,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+}
+
+// MultimodalInputRequest is a single multimodal input to embed,
+// comprising one or more content items (text and/or image).
+type MultimodalInputRequest struct {
+	Content []MultimodalContentRequest `json:"content"`
+}
+
+// EmbedMultimodalRequest is the JSON body for POST /v1/embed/multimodal.
+type EmbedMultimodalRequest struct {
+	Provider string                   `json:"provider,omitempty"`
+	Model    string                   `json:"model,omitempty"`
+	Inputs   []MultimodalInputRequest `json:"inputs"`
+}
+
+// EmbedMultimodalResponse is the JSON body returned by POST /v1/embed/multimodal.
+type EmbedMultimodalResponse struct {
+	Embeddings [][]float64 `json:"embeddings"`
+}
+
 // ErrorResponse is the wire shape for any non-streaming error.
 type ErrorResponse struct {
 	Error string `json:"error"`

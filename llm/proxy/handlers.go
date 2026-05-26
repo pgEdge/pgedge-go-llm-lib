@@ -11,6 +11,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -427,6 +428,76 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := encodeJSON(w, EmbedResponse{Embeddings: vecs}); err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+	}
+}
+
+func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
+	r, reqID := p.ensureRequestID(r)
+	if reqID != "" {
+		w.Header().Set(p.requestIDHeaderName(), reqID)
+	}
+	if !p.authorize(w, r) {
+		return
+	}
+	var req EmbedMultimodalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	provider := req.Provider
+	if provider == "" {
+		provider = p.cfg.DefaultProvider
+	}
+	opts, ok := p.cfg.Providers[provider]
+	if !ok {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest,
+			Err: fmt.Errorf("provider %q is not configured", provider), RequestID: reqID})
+		return
+	}
+	if req.Model != "" {
+		opts.Model = req.Model
+	}
+	client, err := llm.NewClient(provider, opts)
+	if err != nil {
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
+		return
+	}
+	libReq := llm.MultimodalEmbedRequest{
+		Inputs: make([]llm.MultimodalInput, len(req.Inputs)),
+	}
+	for i, in := range req.Inputs {
+		contents := make([]llm.MultimodalContent, len(in.Content))
+		for j, c := range in.Content {
+			mc := llm.MultimodalContent{
+				Type:     llm.MultimodalContentType(c.Type),
+				Text:     c.Text,
+				ImageURL: c.ImageURL,
+				MIMEType: c.MIMEType,
+			}
+			if c.ImageBase64 != "" {
+				data, decErr := base64.StdEncoding.DecodeString(c.ImageBase64)
+				if decErr != nil {
+					p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest, Err: decErr, RequestID: reqID})
+					return
+				}
+				mc.ImageData = data
+			}
+			contents[j] = mc
+		}
+		libReq.Inputs[i] = llm.MultimodalInput{Content: contents}
+	}
+	vecs, err := client.EmbedMultimodal(r.Context(), libReq)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, llm.ErrNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := encodeJSON(w, EmbedMultimodalResponse{Embeddings: vecs}); err != nil {
 		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
 	}
 }
