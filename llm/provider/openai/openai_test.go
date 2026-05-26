@@ -665,6 +665,32 @@ func TestEmbedIgnoresForeignExtension(t *testing.T) {
 	}
 }
 
+func TestEmbedNilExtensionEntriesIgnored(t *testing.T) {
+	var captured map[string]any
+	srv := embedCaptureServer(t, &captured)
+	defer srv.Close()
+
+	// A nil interface entry and a typed-nil *Extension entry must not
+	// panic; the valid Extension that follows them should still take
+	// effect.
+	var typedNil *Extension
+	c := newEmbedClient(t, srv.URL,
+		nil,
+		typedNil,
+		Extension{EmbeddingDimensions: 384},
+	)
+	if _, err := c.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	got, ok := captured["dimensions"]
+	if !ok {
+		t.Fatalf("dimensions missing from request body: %#v", captured)
+	}
+	if got.(float64) != 384 {
+		t.Errorf("dimensions = %v, want 384", got)
+	}
+}
+
 func TestEmbedPointerExtension(t *testing.T) {
 	var captured map[string]any
 	srv := embedCaptureServer(t, &captured)

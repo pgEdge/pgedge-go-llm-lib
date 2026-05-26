@@ -9,7 +9,11 @@
 
 package openai
 
-import "github.com/pgEdge/pgedge-go-llm-lib/llm"
+import (
+	"reflect"
+
+	"github.com/pgEdge/pgedge-go-llm-lib/llm"
+)
 
 // Extension carries OpenAI-specific tunables that the unified Client
 // API does not surface directly. Attach via llm.Options.Extensions
@@ -30,9 +34,17 @@ func (Extension) ProviderName() string { return providerName }
 
 // findExtension locates an openai.Extension in a generic
 // []llm.ProviderExtension, accepting both value and pointer forms.
-// Returns nil when no matching extension is present.
+// Returns nil when no matching extension is present. Nil and
+// typed-nil pointer entries are skipped defensively so a malformed
+// Options.Extensions slice never panics here.
 func findExtension(exts []llm.ProviderExtension) *Extension {
 	for _, e := range exts {
+		if e == nil {
+			continue
+		}
+		if rv := reflect.ValueOf(e); rv.Kind() == reflect.Ptr && rv.IsNil() {
+			continue
+		}
 		if e.ProviderName() != providerName {
 			continue
 		}
