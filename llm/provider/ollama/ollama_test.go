@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1376,5 +1377,384 @@ func TestEmbedMultimodalUnsupported(t *testing.T) {
 	})
 	if !errors.Is(err, llm.ErrNotSupported) {
 		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}
+
+// newEmbedClientWithExtension creates an Ollama client that targets the
+// given test-server URL and carries the supplied provider extensions
+// in its client-level Options.
+func newEmbedClientWithExtension(t *testing.T, url string, exts ...llm.ProviderExtension) llm.Client {
+	t.Helper()
+	c, err := New(llm.Options{
+		Model:      "llama3",
+		BaseURL:    url,
+		Retry:      llm.RetryConfig{Disabled: true},
+		Extensions: exts,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	return c
+}
+
+// truncateScript serves /api/embed responses driven by a per-call
+// callback. The callback receives the request body (decoded as the
+// embed input string) plus the zero-based attempt index and returns
+// the HTTP status and JSON-encoded body to write. Captured inputs
+// are recorded in order so tests can assert what the provider sent.
+type truncateScript struct {
+	t       *testing.T
+	mu      sync.Mutex
+	inputs  []string
+	respond func(attempt int, input string) (status int, body []byte)
+}
+
+func newTruncateServer(t *testing.T, respond func(attempt int, input string) (status int, body []byte)) (*httptest.Server, *truncateScript) {
+	t.Helper()
+	s := &truncateScript{t: t, respond: respond}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var req struct {
+			Input string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+
+		s.mu.Lock()
+		attempt := len(s.inputs)
+		s.inputs = append(s.inputs, req.Input)
+		s.mu.Unlock()
+
+		status, body := s.respond(attempt, req.Input)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
+	}))
+	return srv, s
+}
+
+func (s *truncateScript) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.inputs)
+}
+
+func (s *truncateScript) callInputs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.inputs))
+	copy(out, s.inputs)
+	return out
+}
+
+// successEmbedding is a fixed 200-OK response body matching the
+// ollamaEmbedResponse shape.
+var successEmbedding = []byte(`{"embeddings":[[0.1,0.2,0.3]]}`)
+
+func TestEmbedTruncateRetryOnContextOverflow(t *testing.T) {
+	srv, script := newTruncateServer(t, func(attempt int, _ string) (int, []byte) {
+		if attempt == 0 {
+			return http.StatusBadRequest, []byte(`{"error":"the input length exceeds the context length"}`)
+		}
+		return http.StatusOK, successEmbedding
+	})
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedTruncateOnOverflow: true})
+	input := "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+	emb, err := c.Embed(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(emb) != 3 || emb[0] != 0.1 {
+		t.Errorf("unexpected embedding: %v", emb)
+	}
+
+	if got := script.callCount(); got != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", got)
+	}
+	got := script.callInputs()
+	if got[0] != input {
+		t.Errorf("first call should send full input, got %q", got[0])
+	}
+	if got[1] == "" || got[1] == input {
+		t.Errorf("second call should send a truncated input, got %q", got[1])
+	}
+	if len(got[1]) >= len(input) {
+		t.Errorf("second call input not shorter than first: len=%d (full=%d)", len(got[1]), len(input))
+	}
+}
+
+func TestEmbedTruncateRetryOnHTTP500(t *testing.T) {
+	srv, script := newTruncateServer(t, func(attempt int, _ string) (int, []byte) {
+		// First two attempts crash; third (25% truncation) succeeds.
+		if attempt < 2 {
+			return http.StatusInternalServerError, []byte(`{"error":"model runner crashed"}`)
+		}
+		return http.StatusOK, successEmbedding
+	})
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedTruncateOnOverflow: true})
+	input := "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi"
+	if _, err := c.Embed(context.Background(), input); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if got := script.callCount(); got != 3 {
+		t.Errorf("expected 3 HTTP calls (initial + 75%% + 50%%), got %d", got)
+	}
+	got := script.callInputs()
+	for i := 1; i < len(got); i++ {
+		if len(got[i]) >= len(got[i-1]) {
+			t.Errorf("call %d input %q is not shorter than call %d input %q", i, got[i], i-1, got[i-1])
+		}
+	}
+}
+
+func TestEmbedTruncateAllAttemptsFailReturnsOriginalError(t *testing.T) {
+	srv, script := newTruncateServer(t, func(attempt int, _ string) (int, []byte) {
+		if attempt == 0 {
+			return http.StatusInternalServerError, []byte(`{"error":"original failure"}`)
+		}
+		// Distinct retry failure to verify we return the original.
+		return http.StatusBadRequest, []byte(`{"error":"the input length exceeds the context length"}`)
+	})
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedTruncateOnOverflow: true})
+	input := "alpha beta gamma delta epsilon zeta eta theta"
+	_, err := c.Embed(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected error after all retries fail")
+	}
+	var pe *llm.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected ProviderError, got %T: %v", err, err)
+	}
+	if pe.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected original 500 error, got status %d (%s)", pe.StatusCode, pe.Message)
+	}
+	if !strings.Contains(pe.Message, "original failure") {
+		t.Errorf("expected message from original failure, got %q", pe.Message)
+	}
+	// Initial + 3 truncated retries = 4 attempts.
+	if got := script.callCount(); got != 4 {
+		t.Errorf("expected 4 HTTP calls (initial + 3 retries), got %d", got)
+	}
+}
+
+func TestEmbedTruncateDisabledNoRetry(t *testing.T) {
+	srv, script := newTruncateServer(t, func(_ int, _ string) (int, []byte) {
+		return http.StatusInternalServerError, []byte(`{"error":"the input length exceeds the context length"}`)
+	})
+	defer srv.Close()
+
+	// Extension absent — current behaviour preserved (no retry).
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Embed(context.Background(), "alpha beta gamma delta"); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := script.callCount(); got != 1 {
+		t.Errorf("expected 1 HTTP call when truncate disabled, got %d", got)
+	}
+}
+
+func TestEmbedTruncateExplicitlyFalseNoRetry(t *testing.T) {
+	srv, script := newTruncateServer(t, func(_ int, _ string) (int, []byte) {
+		return http.StatusInternalServerError, []byte(`{"error":"context overflow"}`)
+	})
+	defer srv.Close()
+
+	// Extension present but EmbedTruncateOnOverflow is the zero value.
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{})
+	if _, err := c.Embed(context.Background(), "alpha beta gamma delta"); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := script.callCount(); got != 1 {
+		t.Errorf("expected 1 HTTP call when EmbedTruncateOnOverflow is false, got %d", got)
+	}
+}
+
+func TestEmbedTruncateDoesNotRetryUnrelatedFailures(t *testing.T) {
+	// 4xx with a body that does NOT carry the overflow string — must
+	// surface immediately rather than burning through retries.
+	srv, script := newTruncateServer(t, func(_ int, _ string) (int, []byte) {
+		return http.StatusUnauthorized, []byte(`{"error":"unauthorized"}`)
+	})
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedTruncateOnOverflow: true})
+	if _, err := c.Embed(context.Background(), "alpha beta gamma"); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := script.callCount(); got != 1 {
+		t.Errorf("expected 1 HTTP call (no retry on 401), got %d", got)
+	}
+}
+
+func TestEmbedBatchTruncateRetryAppliesPerItem(t *testing.T) {
+	// First item fails once with overflow then succeeds; second item
+	// succeeds first try. Verifies per-item retry semantics inherited
+	// from EmbedBatch's delegation to Embed.
+	srv, script := newTruncateServer(t, func(_ int, input string) (int, []byte) {
+		// Fail only the full first-item input; the 75% truncation drops
+		// it below the threshold and should succeed on the first retry.
+		if strings.HasPrefix(input, "alpha") && len(input) > 45 {
+			return http.StatusBadRequest, []byte(`{"error":"the input length exceeds the context length"}`)
+		}
+		return http.StatusOK, successEmbedding
+	})
+	defer srv.Close()
+
+	c := newEmbedClientWithExtension(t, srv.URL, Extension{EmbedTruncateOnOverflow: true})
+	first := "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+	second := "short input"
+	embs, err := c.EmbedBatch(context.Background(), []string{first, second})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if len(embs) != 2 {
+		t.Fatalf("expected 2 embeddings, got %d", len(embs))
+	}
+	// 2 calls for first item (initial fail + retry success), 1 for second.
+	if got := script.callCount(); got != 3 {
+		t.Errorf("expected 3 HTTP calls, got %d", got)
+	}
+}
+
+func TestTruncateAtWordBoundaryWalksBackToSpace(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		fraction float64
+		want     string
+	}{
+		{
+			name:     "cuts at previous space on 75% fraction",
+			input:    "alpha beta gamma delta epsilon zeta",
+			fraction: 0.75,
+			want:     "alpha beta gamma delta", // 75% of 35 = 26; walk back to space at idx 22.
+		},
+		{
+			name:     "target exactly at a space",
+			input:    "alpha beta",
+			fraction: 0.5,
+			want:     "alpha", // target=5 is the space itself; cut there excluding the space.
+		},
+		{
+			name:     "hard byte cut when no space",
+			input:    "abcdefghijklmnopqrstuvwxyz",
+			fraction: 0.5,
+			want:     "abcdefghijklm",
+		},
+		{
+			name:     "fraction so small the target is zero returns empty",
+			input:    "hi",
+			fraction: 0.25,
+			want:     "",
+		},
+		{
+			name:     "fraction >= 1 returns full input",
+			input:    "alpha beta",
+			fraction: 1.0,
+			want:     "alpha beta",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateAtWordBoundary(tc.input, tc.fraction)
+			if got != tc.want {
+				t.Errorf("truncateAtWordBoundary(%q, %v) = %q, want %q", tc.input, tc.fraction, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestShouldRetryWithTruncationDetection(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   []byte
+		want   bool
+	}{
+		{"http 500 triggers retry", http.StatusInternalServerError, []byte(`{}`), true},
+		{"context-overflow body in 400 triggers retry", http.StatusBadRequest,
+			[]byte(`{"error":"the input length exceeds the context length"}`), true},
+		{"unrelated 400 does not trigger retry", http.StatusBadRequest, []byte(`{"error":"bad request"}`), false},
+		{"401 does not trigger retry", http.StatusUnauthorized, []byte(`{"error":"unauthorized"}`), false},
+		{"empty body, success status does not trigger retry", http.StatusOK, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldRetryWithTruncation(tc.status, tc.body); got != tc.want {
+				t.Errorf("shouldRetryWithTruncation(%d, %s) = %v, want %v", tc.status, string(tc.body), got, tc.want)
+			}
+		})
+	}
+}
+
+// foreignExtension is a ProviderExtension whose ProviderName is not "ollama".
+type foreignExtension struct{}
+
+func (foreignExtension) ProviderName() string { return "not-ollama" }
+
+func TestEmbedTruncateIgnoresForeignExtension(t *testing.T) {
+	srv, script := newTruncateServer(t, func(_ int, _ string) (int, []byte) {
+		return http.StatusInternalServerError, []byte(`{"error":"x"}`)
+	})
+	defer srv.Close()
+
+	// Only a foreign extension is present — the Ollama provider must
+	// not enable truncation based on it.
+	c := newEmbedClientWithExtension(t, srv.URL, foreignExtension{})
+	if _, err := c.Embed(context.Background(), "alpha beta gamma"); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := script.callCount(); got != 1 {
+		t.Errorf("expected 1 HTTP call when only a foreign extension is present, got %d", got)
+	}
+}
+
+func TestEmbedTruncateNilExtensionEntriesIgnored(t *testing.T) {
+	srv, script := newTruncateServer(t, func(attempt int, _ string) (int, []byte) {
+		if attempt == 0 {
+			return http.StatusInternalServerError, []byte(`{"error":"x"}`)
+		}
+		return http.StatusOK, successEmbedding
+	})
+	defer srv.Close()
+
+	// A nil interface entry and a typed-nil *Extension entry must not
+	// panic; the valid Extension that follows them should still take
+	// effect.
+	var typedNil *Extension
+	c := newEmbedClientWithExtension(t, srv.URL,
+		nil,
+		typedNil,
+		Extension{EmbedTruncateOnOverflow: true},
+	)
+	if _, err := c.Embed(context.Background(), "alpha beta gamma delta epsilon"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if got := script.callCount(); got != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", got)
+	}
+}
+
+func TestEmbedTruncatePointerExtension(t *testing.T) {
+	srv, script := newTruncateServer(t, func(attempt int, _ string) (int, []byte) {
+		if attempt == 0 {
+			return http.StatusInternalServerError, []byte(`{"error":"x"}`)
+		}
+		return http.StatusOK, successEmbedding
+	})
+	defer srv.Close()
+
+	ext := &Extension{EmbedTruncateOnOverflow: true}
+	c := newEmbedClientWithExtension(t, srv.URL, ext)
+	if _, err := c.Embed(context.Background(), "alpha beta gamma delta epsilon"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if got := script.callCount(); got != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", got)
 	}
 }
