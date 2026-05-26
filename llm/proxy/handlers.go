@@ -408,6 +408,14 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
 		return
 	}
+	if len(req.Input) == 0 {
+		p.writeError(w, r, ErrorInfo{
+			StatusCode: http.StatusBadRequest,
+			Err:        fmt.Errorf("input must contain at least one string"),
+			RequestID:  reqID,
+		})
+		return
+	}
 	provider := req.Provider
 	if provider == "" {
 		provider = p.cfg.DefaultProvider
@@ -454,6 +462,14 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
 		return
 	}
+	if req.Query == "" || len(req.Documents) == 0 {
+		p.writeError(w, r, ErrorInfo{
+			StatusCode: http.StatusBadRequest,
+			Err:        fmt.Errorf("query and documents are required"),
+			RequestID:  reqID,
+		})
+		return
+	}
 	provider := req.Provider
 	if provider == "" {
 		provider = p.cfg.DefaultProvider
@@ -494,6 +510,11 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const (
+	maxEmbedMultimodalBodyBytes = 16 << 20 // 16 MiB
+	maxDecodedImageBytes        = 10 << 20 // 10 MiB per image
+)
+
 func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 	r, reqID := p.ensureRequestID(r)
 	if reqID != "" {
@@ -502,9 +523,18 @@ func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 	if !p.authorize(w, r) {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxEmbedMultimodalBodyBytes)
 	var req EmbedMultimodalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
+		return
+	}
+	if len(req.Inputs) == 0 {
+		p.writeError(w, r, ErrorInfo{
+			StatusCode: http.StatusBadRequest,
+			Err:        fmt.Errorf("inputs must contain at least one item"),
+			RequestID:  reqID,
+		})
 		return
 	}
 	provider := req.Provider
@@ -538,6 +568,15 @@ func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 				MIMEType: c.MIMEType,
 			}
 			if c.ImageBase64 != "" {
+				if base64.StdEncoding.DecodedLen(len(c.ImageBase64)) > maxDecodedImageBytes {
+					p.writeError(w, r, ErrorInfo{
+						Provider:   provider,
+						StatusCode: http.StatusBadRequest,
+						Err:        fmt.Errorf("image_base64 exceeds max decoded size"),
+						RequestID:  reqID,
+					})
+					return
+				}
 				data, decErr := base64.StdEncoding.DecodeString(c.ImageBase64)
 				if decErr != nil {
 					p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusBadRequest, Err: decErr, RequestID: reqID})

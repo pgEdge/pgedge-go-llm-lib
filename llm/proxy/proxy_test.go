@@ -1388,7 +1388,7 @@ func TestEmbedMultimodalUnsupportedReturns501(t *testing.T) {
 		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal",
-		bytes.NewReader([]byte(`{"provider":"fake","inputs":[]}`)))
+		bytes.NewReader([]byte(`{"provider":"fake","inputs":[{"content":[{"type":"text","text":"hi"}]}]}`)))
 	rec := httptest.NewRecorder()
 	p.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotImplemented {
@@ -1548,5 +1548,50 @@ func TestHookStreamingResponseAssembledFromChunks(t *testing.T) {
 	}
 	if respInfo.Usage.TotalTokens != 33 {
 		t.Errorf("Usage.TotalTokens = %d, want 33", respInfo.Usage.TotalTokens)
+	}
+}
+
+func TestEmbedBadRequest(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed",
+		bytes.NewReader([]byte(`{"provider":"fake","input":[]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEmbedMultimodalBadRequest(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/embed/multimodal",
+		bytes.NewReader([]byte(`{"provider":"fake","inputs":[]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRerankBadRequest(t *testing.T) {
+	setFake(&fakeProvider{})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank",
+		bytes.NewReader([]byte(`{"provider":"fake","query":"q","documents":[]}`)))
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body=%s)", rec.Code, rec.Body.String())
 	}
 }
