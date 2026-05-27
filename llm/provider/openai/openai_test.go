@@ -941,10 +941,15 @@ func TestChatStreamWithToolCalls(t *testing.T) {
 }
 
 func TestMaxCompletionTokensForNewModels(t *testing.T) {
-	// Test that o1/o3/gpt-5 models use max_completion_tokens.
+	// When the ResponsesAPI override is set to false, o1/o3/gpt-5 models
+	// stay on /v1/chat/completions and must use max_completion_tokens
+	// instead of max_tokens.
 	for _, model := range []string{"o1-preview", "o3-mini", "gpt-5"} {
 		t.Run(model, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/chat/completions" {
+					t.Errorf("expected /chat/completions, got %s", r.URL.Path)
+				}
 				body, _ := io.ReadAll(r.Body)
 				var req map[string]any
 				json.Unmarshal(body, &req)
@@ -977,9 +982,10 @@ func TestMaxCompletionTokensForNewModels(t *testing.T) {
 			defer srv.Close()
 
 			c, _ := New(llm.Options{
-				APIKey:  "test-key",
-				Model:   model,
-				BaseURL: srv.URL,
+				APIKey:     "test-key",
+				Model:      model,
+				BaseURL:    srv.URL,
+				Extensions: []llm.ProviderExtension{Extension{ResponsesAPI: llm.Bool(false)}},
 			})
 			c.Chat(context.Background(), llm.ChatRequest{
 				Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Hi"}}}},

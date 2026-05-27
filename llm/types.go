@@ -378,6 +378,9 @@ func Float(f float64) *float64 { return &f }
 // Int returns a pointer to i. Use for setting *int option fields.
 func Int(i int) *int { return &i }
 
+// Bool returns a pointer to b. Use for setting *bool option fields.
+func Bool(b bool) *bool { return &b }
+
 // UserText returns a user Message with a single text block.
 func UserText(text string) Message {
 	return Message{

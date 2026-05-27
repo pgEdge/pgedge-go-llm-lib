@@ -252,6 +252,9 @@ type openaiUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if useResponsesAPI(c.model, c.opts.Extensions) {
+		return c.chatResponses(ctx, req)
+	}
 	if err := rejectDocumentBlocks(req); err != nil {
 		return nil, err
 	}
@@ -595,6 +598,9 @@ type streamDeltaFunction struct {
 }
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+	if useResponsesAPI(c.model, c.opts.Extensions) {
+		return c.chatStreamResponses(ctx, req)
+	}
 	if err := rejectDocumentBlocks(req); err != nil {
 		return nil, err
 	}
