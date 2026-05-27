@@ -212,6 +212,13 @@ func (s *SSEScanner) Data() string {
 	return s.data
 }
 
+// Err returns the first non-EOF error encountered by the underlying
+// bufio.Scanner. Callers should check this after Scan returns false to
+// distinguish a clean end-of-stream from a read/parse failure.
+func (s *SSEScanner) Err() error {
+	return s.scanner.Err()
+}
+
 // ValidateBaseURL trims whitespace and a trailing slash, then checks
 // that the URL has an http or https scheme and a non-empty host.
 // providerName is included in error messages so callers can identify

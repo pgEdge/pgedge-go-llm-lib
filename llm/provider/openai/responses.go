@@ -179,12 +179,17 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 	}
 
 	// Temperature: per-request → client default → omit. Reasoning
-	// models (o1/o3/gpt-5) reject non-default temperatures; callers
-	// targeting those models should set Temperature: llm.Float(1) or
-	// pass an Extension that disables the library default.
+	// models (o1/o3/gpt-5) reject every value except their own default
+	// (effectively 1); the library default of 0.7 would cause every
+	// auto-routed call to fail. For those models we forward only an
+	// explicitly-set per-request value and never the client default,
+	// so omitting Temperature on the call lets the model use its own
+	// default. Forced /v1/responses routing for non-reasoning models
+	// (e.g. gpt-4o with Extension{ResponsesAPI: llm.Bool(true)}) still
+	// honours the client default.
 	if req.Temperature != nil {
 		out.Temperature = req.Temperature
-	} else if c.opts.Temperature != nil {
+	} else if c.opts.Temperature != nil && !modelRequiresResponsesAPI(c.model) {
 		out.Temperature = c.opts.Temperature
 	}
 
@@ -510,6 +515,11 @@ func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (
 				}
 				return
 			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			errCh <- fmt.Errorf("read responses stream: %w", err)
+			return
 		}
 
 		usage := &llm.TokenUsage{}

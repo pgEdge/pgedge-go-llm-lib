@@ -79,7 +79,12 @@ func responsesEchoServer(t *testing.T, captured *map[string]any) *httptest.Serve
 			t.Errorf("expected /responses, got %s", r.URL.Path)
 		}
 		if err := json.NewDecoder(r.Body).Decode(captured); err != nil {
-			t.Fatalf("decode request body: %v", err)
+			// t.Fatalf would call FailNow on this handler goroutine,
+			// which Go's testing package only supports from the test
+			// goroutine. Report and bail out via HTTP error instead.
+			t.Errorf("decode request body: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -181,12 +186,15 @@ func TestResponsesAPI_TranslatesSystemPromptToInstructions(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		SystemPrompt: "You are concise.",
 		Messages:     []llm.Message{llm.UserText("Hi")},
@@ -204,12 +212,15 @@ func TestResponsesAPI_ToolsWireShape(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Weather?")},
 		Tools: []llm.Tool{{
@@ -259,12 +270,15 @@ func TestResponsesAPI_ParsesToolCall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	resp, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Weather?")},
 	})
@@ -309,12 +323,15 @@ func TestResponsesAPI_MaxOutputTokensStopReason(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	resp, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
@@ -331,12 +348,15 @@ func TestResponsesAPI_AssistantAndToolHistory(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{
 			llm.UserText("Weather?"),
@@ -374,13 +394,16 @@ func TestResponsesAPI_AssistantAndToolHistory(t *testing.T) {
 }
 
 func TestResponsesAPI_RejectsStopSequences(t *testing.T) {
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: "https://example.invalid",
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
-	_, err := c.Chat(context.Background(), llm.ChatRequest{
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
 		Messages:      []llm.Message{llm.UserText("Hi")},
 		StopSequences: []string{"END"},
 	})
@@ -417,12 +440,15 @@ func TestResponsesAPI_Stream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
@@ -472,12 +498,15 @@ func TestResponsesAPI_StreamToolCall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Weather?")},
 		Tools: []llm.Tool{{
@@ -525,12 +554,15 @@ func TestResponsesAPI_AccumulatesUsage(t *testing.T) {
 	srv := responsesEchoServer(t, &map[string]any{})
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	for i := 0; i < 2; i++ {
 		if _, err := c.Chat(context.Background(), llm.ChatRequest{
 			Messages: []llm.Message{llm.UserText("Hi")},
@@ -551,13 +583,16 @@ func TestResponsesAPI_AuthError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
-	_, err := c.Chat(context.Background(), llm.ChatRequest{
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
 	if err == nil {
@@ -573,7 +608,7 @@ func TestResponsesAPI_PerRequestOverrides(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:      "test-key",
 		Model:       "gpt-5",
 		BaseURL:     srv.URL,
@@ -581,6 +616,9 @@ func TestResponsesAPI_PerRequestOverrides(t *testing.T) {
 		MaxTokens:   llm.Int(100),
 		Temperature: llm.Float(0.2),
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages:    []llm.Message{llm.UserText("Hi")},
 		MaxTokens:   llm.Int(42),
@@ -601,12 +639,15 @@ func TestResponsesAPI_UserMessageWithInlineImage(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{
 			llm.UserBlocks(
@@ -639,12 +680,15 @@ func TestResponsesAPI_UserMessageWithImageURL(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey:  "test-key",
 		Model:   "gpt-5",
 		BaseURL: srv.URL,
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserBlocks(llm.ImageURLBlock("https://example.com/cat.png"))},
 	}); err != nil {
@@ -745,12 +789,15 @@ func TestResponsesAPI_ToolChoiceModes(t *testing.T) {
 			var captured map[string]any
 			srv := responsesEchoServer(t, &captured)
 			defer srv.Close()
-			c, _ := New(llm.Options{
+			c, err := New(llm.Options{
 				APIKey:  "test-key",
 				Model:   "gpt-5",
 				BaseURL: srv.URL,
 				Retry:   llm.RetryConfig{Disabled: true},
 			})
+			if err != nil {
+				t.Fatalf("create client: %v", err)
+			}
 			if _, err := c.Chat(context.Background(), llm.ChatRequest{
 				Messages:   []llm.Message{llm.UserText("Hi")},
 				ToolChoice: &tc.tc,
@@ -777,10 +824,13 @@ func TestResponsesAPI_ResponseFormatJSON(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages:       []llm.Message{llm.UserText("Hi")},
 		ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSON},
@@ -799,10 +849,13 @@ func TestResponsesAPI_ResponseFormatJSONSchema(t *testing.T) {
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	if _, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 		ResponseFormat: &llm.ResponseFormat{
@@ -831,10 +884,13 @@ func TestResponsesAPI_IncompleteStatusMapsToMaxTokens(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	resp, err := c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
@@ -847,11 +903,14 @@ func TestResponsesAPI_IncompleteStatusMapsToMaxTokens(t *testing.T) {
 }
 
 func TestResponsesAPI_RejectsDocumentBlock(t *testing.T) {
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: "https://example.invalid",
 		Retry: llm.RetryConfig{Disabled: true},
 	})
-	_, err := c.Chat(context.Background(), llm.ChatRequest{
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{
 			llm.UserBlocks(llm.DocumentBlock([]byte("%PDF"), "application/pdf", "doc.pdf")),
 		},
@@ -867,12 +926,15 @@ func TestResponsesAPI_RejectsDocumentBlock(t *testing.T) {
 func TestResponsesAPI_NetworkErrorReturnsBare(t *testing.T) {
 	// Point to a port that is guaranteed-closed so DoJSON returns a
 	// network-level error (status == 0).
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5",
 		BaseURL: "http://127.0.0.1:1",
 		Retry:   llm.RetryConfig{Disabled: true},
 	})
-	_, err := c.Chat(context.Background(), llm.ChatRequest{
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
 	if err == nil {
@@ -887,11 +949,14 @@ func TestResponsesAPI_StreamHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
-	_, err := c.ChatStream(context.Background(), llm.ChatRequest{
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	_, err = c.ChatStream(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
 	if err == nil {
@@ -911,10 +976,13 @@ func TestResponsesAPI_StreamMalformedJSONSurfacesError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
@@ -937,10 +1005,13 @@ func TestResponsesAPI_StreamResponseFailed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
@@ -979,10 +1050,13 @@ func TestResponsesAPI_StreamIgnoresEmptyDeltasAndUnknownItems(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(llm.Options{
+	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
 		Retry: llm.RetryConfig{Disabled: true},
 	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
 	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
 		Messages: []llm.Message{llm.UserText("Hi")},
 	})
@@ -1010,6 +1084,119 @@ func TestResponsesAPI_StreamIgnoresEmptyDeltasAndUnknownItems(t *testing.T) {
 	}
 	if done.Usage == nil || done.Usage.TotalTokens != 0 {
 		t.Errorf("expected zero usage on done, got %+v", done.Usage)
+	}
+}
+
+func TestResponsesAPI_OmitsClientDefaultTemperatureForReasoningModels(t *testing.T) {
+	// Reasoning models (o1/o3/gpt-5) reject every temperature value
+	// except their own default (effectively 1). The library default
+	// of 0.7 must NOT be forwarded; only an explicit per-request
+	// value gets sent.
+	t.Run("client-default-dropped", func(t *testing.T) {
+		var captured map[string]any
+		srv := responsesEchoServer(t, &captured)
+		defer srv.Close()
+
+		c, err := New(llm.Options{
+			APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+			Retry:       llm.RetryConfig{Disabled: true},
+			Temperature: llm.Float(0.7),
+		})
+		if err != nil {
+			t.Fatalf("create client: %v", err)
+		}
+		if _, err := c.Chat(context.Background(), llm.ChatRequest{
+			Messages: []llm.Message{llm.UserText("Hi")},
+		}); err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		if _, present := captured["temperature"]; present {
+			t.Errorf("client-default temperature must not be sent for reasoning models; got %#v", captured)
+		}
+	})
+
+	t.Run("explicit-per-request-temperature-still-sent", func(t *testing.T) {
+		var captured map[string]any
+		srv := responsesEchoServer(t, &captured)
+		defer srv.Close()
+
+		c, err := New(llm.Options{
+			APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+			Retry: llm.RetryConfig{Disabled: true},
+		})
+		if err != nil {
+			t.Fatalf("create client: %v", err)
+		}
+		if _, err := c.Chat(context.Background(), llm.ChatRequest{
+			Messages:    []llm.Message{llm.UserText("Hi")},
+			Temperature: llm.Float(1),
+		}); err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		if got := captured["temperature"]; got != float64(1) {
+			t.Errorf("temperature = %v, want 1 (explicit per-request value)", got)
+		}
+	})
+
+	t.Run("non-reasoning-model-forced-onto-responses-keeps-default", func(t *testing.T) {
+		// Forcing a non-reasoning model (gpt-4o) onto /v1/responses
+		// must still honour the client-default temperature, since the
+		// API accepts it for those models.
+		var captured map[string]any
+		srv := responsesEchoServer(t, &captured)
+		defer srv.Close()
+
+		c, err := New(llm.Options{
+			APIKey: "test-key", Model: "gpt-4o", BaseURL: srv.URL,
+			Retry:       llm.RetryConfig{Disabled: true},
+			Temperature: llm.Float(0.5),
+			Extensions:  []llm.ProviderExtension{Extension{ResponsesAPI: llm.Bool(true)}},
+		})
+		if err != nil {
+			t.Fatalf("create client: %v", err)
+		}
+		if _, err := c.Chat(context.Background(), llm.ChatRequest{
+			Messages: []llm.Message{llm.UserText("Hi")},
+		}); err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		if got := captured["temperature"]; got != 0.5 {
+			t.Errorf("temperature = %v, want 0.5", got)
+		}
+	})
+}
+
+func TestResponsesAPI_StreamSurfacesScannerError(t *testing.T) {
+	// A line longer than bufio.Scanner's default MaxScanTokenSize
+	// (64KiB) triggers bufio.ErrTooLong. The stream goroutine must
+	// surface that error via Err rather than silently emitting a
+	// ChunkDone as if the stream completed cleanly.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		big := strings.Repeat("A", 70*1024)
+		_, _ = w.Write([]byte("data: " + big + "\n\n"))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c, err := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range stream.Chunks {
+	}
+	if err := <-stream.Err; err == nil {
+		t.Fatal("expected scanner error from over-long SSE line")
 	}
 }
 

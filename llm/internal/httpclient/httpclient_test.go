@@ -387,6 +387,28 @@ func TestSSEScannerData(t *testing.T) {
 	}
 }
 
+// TestSSEScannerErrNil verifies Err returns nil on a clean stream.
+func TestSSEScannerErrNil(t *testing.T) {
+	scanner := NewSSEScanner(strings.NewReader("data: ok\n\n"))
+	for scanner.Scan() {
+	}
+	if err := scanner.Err(); err != nil {
+		t.Errorf("Err() = %v, want nil", err)
+	}
+}
+
+// TestSSEScannerErrTooLong verifies Err surfaces bufio.ErrTooLong when
+// a single SSE line exceeds bufio.Scanner's 64KiB default buffer.
+func TestSSEScannerErrTooLong(t *testing.T) {
+	big := "data: " + strings.Repeat("A", 70*1024) + "\n\n"
+	scanner := NewSSEScanner(strings.NewReader(big))
+	for scanner.Scan() {
+	}
+	if err := scanner.Err(); err == nil {
+		t.Fatal("expected non-nil Err for an over-long SSE line")
+	}
+}
+
 func TestNewInstallsRetryTransport(t *testing.T) {
 	cfg := RetryConfig{MaxRetries: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}
 
