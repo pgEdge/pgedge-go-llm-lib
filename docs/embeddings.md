@@ -12,7 +12,7 @@ providers:
 | Provider  | Embed | EmbedBatch | Multimodal Embeddings | Batch Method      |
 |-----------|-------|------------|-----------------------|-------------------|
 | OpenAI    | Yes   | Yes        | No                    | Native batch API  |
-| Gemini    | Yes   | Yes        | No                    | Sequential calls  |
+| Gemini    | Yes   | Yes        | No                    | Native batch API  |
 | Ollama    | Yes   | Yes        | No                    | Sequential calls  |
 | Anthropic | No    | No         | No                    | Not supported     |
 | Voyage    | Yes   | Yes        | Yes                   | Native batch API  |
@@ -82,10 +82,13 @@ corresponds to the input text at the same index.
 The OpenAI provider sends all texts in a single API request
 and sorts the results by index to maintain order.
 
-The Gemini and Ollama providers do not have native batch
-embedding endpoints. The `EmbedBatch` method makes sequential
-calls to the single-embed endpoint for each text in the input
-slice.
+The Gemini provider sends all texts in a single
+`batchEmbedContents` request, and the response embeddings are
+returned in the same order as the input texts.
+
+The Ollama provider does not have a native batch embedding
+endpoint. The `EmbedBatch` method makes sequential calls to
+the single-embed endpoint for each text in the input slice.
 
 ## Embedding Models
 
