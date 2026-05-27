@@ -229,6 +229,22 @@ type geminiEmbedding struct {
 	Values []float64 `json:"values"`
 }
 
+// geminiBatchEmbedRequest is the payload for models/{model}:batchEmbedContents.
+// Each sub-request must repeat the fully-qualified "models/{model}" name —
+// this is a quirk of the batch endpoint.
+type geminiBatchEmbedRequest struct {
+	Requests []geminiBatchEmbedSubRequest `json:"requests"`
+}
+
+type geminiBatchEmbedSubRequest struct {
+	Model   string        `json:"model"`
+	Content geminiContent `json:"content"`
+}
+
+type geminiBatchEmbedResponse struct {
+	Embeddings []geminiEmbedding `json:"embeddings"`
+}
+
 // ---------- ListModels types ----------
 
 type geminiModelsResponse struct {
@@ -700,16 +716,59 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 	return resp.Embedding.Values, nil
 }
 
-// EmbedBatch performs sequential Embed calls since Gemini doesn't
-// have a native batch embedding endpoint.
+// EmbedBatch sends all texts in a single batchEmbedContents request.
+// The response's embeddings array is returned in the same order as the
+// input texts.
 func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, error) {
-	result := make([][]float64, len(texts))
+	if len(texts) == 0 {
+		return [][]float64{}, nil
+	}
+
+	// The batch endpoint requires each sub-request to carry the
+	// fully-qualified "models/{model}" name, even though the same
+	// model also appears in the URL path.
+	qualifiedModel := "models/" + c.model
+	subRequests := make([]geminiBatchEmbedSubRequest, len(texts))
 	for i, text := range texts {
-		embedding, err := c.Embed(ctx, text)
-		if err != nil {
-			return nil, fmt.Errorf("embed text %d: %w", i, err)
+		subRequests[i] = geminiBatchEmbedSubRequest{
+			Model: qualifiedModel,
+			Content: geminiContent{
+				Parts: []geminiPart{{Text: text}},
+			},
 		}
-		result[i] = embedding
+	}
+
+	url := fmt.Sprintf("%s/v1beta/models/%s:batchEmbedContents", c.baseURL, c.model)
+
+	var resp geminiBatchEmbedResponse
+	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
+		url, c.headers(), geminiBatchEmbedRequest{Requests: subRequests}, &resp)
+	if err != nil && status == 0 {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, mapError(status, body)
+	}
+
+	if len(resp.Embeddings) != len(texts) {
+		return nil, &llm.ProviderError{
+			Err: llm.ErrProviderError,
+			Message: fmt.Sprintf("batch embed returned %d embeddings for %d inputs",
+				len(resp.Embeddings), len(texts)),
+			Provider: providerName,
+		}
+	}
+
+	result := make([][]float64, len(texts))
+	for i, emb := range resp.Embeddings {
+		if len(emb.Values) == 0 {
+			return nil, &llm.ProviderError{
+				Err:      llm.ErrProviderError,
+				Message:  fmt.Sprintf("no embedding data returned for input %d", i),
+				Provider: providerName,
+			}
+		}
+		result[i] = emb.Values
 	}
 	return result, nil
 }

@@ -651,26 +651,52 @@ func TestEmbedBatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		expectedPath := "/v1beta/models/gemini-2.0-flash:batchEmbedContents"
+		if r.URL.Path != expectedPath {
+			t.Errorf("expected %s, got %s", expectedPath, r.URL.Path)
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != "test-key" {
+			t.Errorf("expected x-goog-api-key=test-key header, got %q", got)
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
 		json.Unmarshal(body, &req)
 
-		content := req["content"].(map[string]any)
-		parts := content["parts"].([]any)
-		part := parts[0].(map[string]any)
-		text := part["text"].(string)
-
-		var values []float64
-		if text == "hello" {
-			values = []float64{0.1, 0.2, 0.3}
-		} else {
-			values = []float64{0.4, 0.5, 0.6}
+		requests, ok := req["requests"].([]any)
+		if !ok {
+			t.Fatalf("expected requests array in body, got %+v", req)
+		}
+		if len(requests) != 2 {
+			t.Fatalf("expected 2 sub-requests, got %d", len(requests))
 		}
 
+		// Each sub-request must carry the fully-qualified model name.
+		gotTexts := make([]string, len(requests))
+		for i, r := range requests {
+			sub := r.(map[string]any)
+			if sub["model"] != "models/gemini-2.0-flash" {
+				t.Errorf("sub-request %d: expected model models/gemini-2.0-flash, got %v",
+					i, sub["model"])
+			}
+			content := sub["content"].(map[string]any)
+			parts := content["parts"].([]any)
+			part := parts[0].(map[string]any)
+			gotTexts[i] = part["text"].(string)
+		}
+		if gotTexts[0] != "hello" || gotTexts[1] != "world" {
+			t.Errorf("expected texts [hello world], got %v", gotTexts)
+		}
+
+		// Respond with embeddings in the same order as the request.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"embedding": map[string]any{
-				"values": values,
+			"embeddings": []map[string]any{
+				{"values": []float64{0.1, 0.2, 0.3}},
+				{"values": []float64{0.4, 0.5, 0.6}},
 			},
 		})
 	}))
@@ -691,9 +717,74 @@ func TestEmbedBatch(t *testing.T) {
 		t.Errorf("expected 0.4, got %f", embeddings[1][0])
 	}
 
-	// Should have made 2 sequential calls.
-	if callCount != 2 {
-		t.Errorf("expected 2 API calls for batch, got %d", callCount)
+	// All N texts must be unpacked from a single batch request.
+	if callCount != 1 {
+		t.Errorf("expected 1 batch API call, got %d", callCount)
+	}
+}
+
+func TestEmbedBatchEmpty(t *testing.T) {
+	// An empty input slice must return an empty result without
+	// issuing any HTTP request.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s for empty input", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	embeddings, err := c.EmbedBatch(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(embeddings) != 0 {
+		t.Errorf("expected empty result, got %d embeddings", len(embeddings))
+	}
+}
+
+func TestEmbedBatchLengthMismatch(t *testing.T) {
+	// Provider responses returning fewer embeddings than inputs
+	// must surface as a ProviderError, not silently truncate.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": []map[string]any{
+				{"values": []float64{0.1, 0.2}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.EmbedBatch(context.Background(), []string{"a", "b"})
+	if err == nil {
+		t.Fatal("expected error for length mismatch")
+	}
+	if !errors.Is(err, llm.ErrProviderError) {
+		t.Errorf("expected ErrProviderError, got %v", err)
+	}
+}
+
+func TestEmbedBatchEmptyValues(t *testing.T) {
+	// An embedding entry with no values must surface as a
+	// ProviderError rather than returning a zero-length vector.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": []map[string]any{
+				{"values": []float64{0.1, 0.2}},
+				{"values": []float64{}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.EmbedBatch(context.Background(), []string{"a", "b"})
+	if err == nil {
+		t.Fatal("expected error for empty values in batch response")
+	}
+	if !errors.Is(err, llm.ErrProviderError) {
+		t.Errorf("expected ErrProviderError, got %v", err)
 	}
 }
 
