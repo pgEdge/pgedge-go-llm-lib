@@ -227,6 +227,133 @@ func TestChatWithToolsAndCacheControl(t *testing.T) {
 	}
 }
 
+func TestChatWithSystemCaching(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+
+		system, ok := req["system"].([]any)
+		if !ok || len(system) != 1 {
+			t.Fatalf("expected 1 system block, got %v", req["system"])
+		}
+		block := system[0].(map[string]any)
+		if block["text"] != "you are a DBA assistant" {
+			t.Errorf("expected system text 'you are a DBA assistant', got %v", block["text"])
+		}
+		cc, ok := block["cache_control"].(map[string]any)
+		if !ok {
+			t.Fatal("expected cache_control on system block")
+		}
+		if cc["type"] != "ephemeral" {
+			t.Errorf("expected cache_control type ephemeral, got %v", cc["type"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"stop_reason": "end_turn",
+			"usage": map[string]any{
+				"input_tokens":                10,
+				"output_tokens":               2,
+				"cache_creation_input_tokens": 200,
+				"cache_read_input_tokens":     0,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), WithSystemCaching(llm.ChatRequest{
+		SystemPrompt: "you are a DBA assistant",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestChatSystemCachingNoSystemPromptNoMarker(t *testing.T) {
+	// WithSystemCaching on a request without a system prompt must not
+	// produce a system block on the wire — there is nothing to cache.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+
+		if _, present := req["system"]; present {
+			t.Errorf("expected no system block, got %v", req["system"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), WithSystemCaching(llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestChatSystemCachingWithResponseFormatTagsLastBlock(t *testing.T) {
+	// ResponseFormat appends a JSON-directive system block. The cache
+	// marker must land on that final block, not on the original.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+
+		system, ok := req["system"].([]any)
+		if !ok || len(system) != 2 {
+			t.Fatalf("expected 2 system blocks, got %v", req["system"])
+		}
+		first := system[0].(map[string]any)
+		if _, present := first["cache_control"]; present {
+			t.Errorf("did not expect cache_control on first system block: %v", first)
+		}
+		last := system[1].(map[string]any)
+		cc, ok := last["cache_control"].(map[string]any)
+		if !ok {
+			t.Fatal("expected cache_control on final system block")
+		}
+		if cc["type"] != "ephemeral" {
+			t.Errorf("expected cache_control type ephemeral, got %v", cc["type"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":     []map[string]any{{"type": "text", "text": "{}"}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), WithSystemCaching(llm.ChatRequest{
+		SystemPrompt:   "you are a DBA assistant",
+		ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSON},
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEmbedNotSupported(t *testing.T) {
 	c, err := New(llm.Options{
 		APIKey: "test-key",

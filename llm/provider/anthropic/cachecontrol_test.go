@@ -48,6 +48,40 @@ func TestWithToolCachingNoToolsNoOp(t *testing.T) {
 	}
 }
 
+func TestWithSystemCachingAttachesExtension(t *testing.T) {
+	req := llm.ChatRequest{SystemPrompt: "you are a helpful assistant"}
+	out := WithSystemCaching(req)
+
+	if out.SystemPrompt != req.SystemPrompt {
+		t.Errorf("SystemPrompt changed: %q", out.SystemPrompt)
+	}
+	ext := llm.FindExtension[Extension](out, "anthropic")
+	if ext == nil {
+		t.Fatal("no anthropic extension attached")
+	}
+	if !ext.CacheSystem {
+		t.Errorf("CacheSystem = false, want true")
+	}
+	// Ensure WithSystemCaching does not inadvertently enable tool
+	// caching for the first tool by leaving CacheToolsThrough at its
+	// zero value.
+	if ext.CacheToolsThrough >= 0 {
+		t.Errorf("CacheToolsThrough = %d, want < 0", ext.CacheToolsThrough)
+	}
+}
+
+func TestWithSystemCachingNoSystemPromptStillAttaches(t *testing.T) {
+	// WithSystemCaching attaches the extension regardless; the wire
+	// builder is responsible for skipping the marker when there is no
+	// system block to tag.
+	req := llm.ChatRequest{}
+	out := WithSystemCaching(req)
+	ext := llm.FindExtension[Extension](out, "anthropic")
+	if ext == nil || !ext.CacheSystem {
+		t.Fatalf("expected CacheSystem extension, got %+v", ext)
+	}
+}
+
 func TestWithExtendedThinkingAttachesExtension(t *testing.T) {
 	req := llm.ChatRequest{}
 	out := WithExtendedThinking(req, 16000)

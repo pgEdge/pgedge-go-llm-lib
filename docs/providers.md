@@ -28,8 +28,9 @@ The Anthropic provider supports the following features:
 
 - chat completions and streaming.
 - tool and function calling.
-- prompt caching via the `anthropic.WithToolCaching` helper and
-  `CacheControl` markers on `ContentBlock` values.
+- prompt caching via the `anthropic.WithToolCaching` and
+  `anthropic.WithSystemCaching` helpers and `CacheControl` markers
+  on `ContentBlock` values.
 - extended thinking mode via `anthropic.WithExtendedThinking`.
 - cumulative token usage tracking with cache metrics
   (`CacheCreationInputTokens`, `CacheReadInputTokens`).
