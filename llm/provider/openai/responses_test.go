@@ -567,3 +567,455 @@ func TestResponsesAPI_AuthError(t *testing.T) {
 		t.Errorf("expected ErrAuthentication, got %v", err)
 	}
 }
+
+func TestResponsesAPI_PerRequestOverrides(t *testing.T) {
+	var captured map[string]any
+	srv := responsesEchoServer(t, &captured)
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey:      "test-key",
+		Model:       "gpt-5",
+		BaseURL:     srv.URL,
+		Retry:       llm.RetryConfig{Disabled: true},
+		MaxTokens:   llm.Int(100),
+		Temperature: llm.Float(0.2),
+	})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:    []llm.Message{llm.UserText("Hi")},
+		MaxTokens:   llm.Int(42),
+		Temperature: llm.Float(0.9),
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := captured["max_output_tokens"]; got != float64(42) {
+		t.Errorf("max_output_tokens = %v, want 42 (per-request override)", got)
+	}
+	if got := captured["temperature"]; got != 0.9 {
+		t.Errorf("temperature = %v, want 0.9 (per-request override)", got)
+	}
+}
+
+func TestResponsesAPI_UserMessageWithInlineImage(t *testing.T) {
+	var captured map[string]any
+	srv := responsesEchoServer(t, &captured)
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey:  "test-key",
+		Model:   "gpt-5",
+		BaseURL: srv.URL,
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			llm.UserBlocks(
+				llm.TextBlock("describe"),
+				llm.ImageBlock([]byte{0xff, 0xd8, 0xff}, "image/jpeg"),
+			),
+		},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	input := captured["input"].([]any)
+	parts := input[0].(map[string]any)["content"].([]any)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+	if parts[0].(map[string]any)["type"] != "input_text" {
+		t.Errorf("part 0 type = %v, want input_text", parts[0].(map[string]any)["type"])
+	}
+	if parts[1].(map[string]any)["type"] != "input_image" {
+		t.Errorf("part 1 type = %v, want input_image", parts[1].(map[string]any)["type"])
+	}
+	url := parts[1].(map[string]any)["image_url"].(string)
+	if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
+		t.Errorf("image_url = %q, want data:image/jpeg;base64,... prefix", url)
+	}
+}
+
+func TestResponsesAPI_UserMessageWithImageURL(t *testing.T) {
+	var captured map[string]any
+	srv := responsesEchoServer(t, &captured)
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey:  "test-key",
+		Model:   "gpt-5",
+		BaseURL: srv.URL,
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserBlocks(llm.ImageURLBlock("https://example.com/cat.png"))},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	parts := captured["input"].([]any)[0].(map[string]any)["content"].([]any)
+	if parts[0].(map[string]any)["image_url"] != "https://example.com/cat.png" {
+		t.Errorf("image_url = %v, want https://example.com/cat.png", parts[0].(map[string]any)["image_url"])
+	}
+}
+
+func TestResponsesAPI_ImageBlockWithoutDataOrURLDropped(t *testing.T) {
+	got := convertResponsesUserMessage(llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			llm.TextBlock("hi"),
+			{Type: llm.BlockImage, Image: &llm.ImageContent{}},
+			{Type: llm.BlockImage}, // nil Image pointer
+		},
+	})
+	if len(got.Content) != 1 {
+		t.Fatalf("expected only the text part, got %d parts: %#v", len(got.Content), got.Content)
+	}
+	if got.Content[0].Type != "input_text" {
+		t.Errorf("part type = %s, want input_text", got.Content[0].Type)
+	}
+}
+
+func TestResponsesAPI_ImageBlockMissingMediaTypeDefaultsToOctetStream(t *testing.T) {
+	got := convertResponsesUserMessage(llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockImage, Image: &llm.ImageContent{Data: []byte{0x00}}},
+		},
+	})
+	if len(got.Content) != 1 || !strings.HasPrefix(got.Content[0].ImageURL, "data:application/octet-stream;base64,") {
+		t.Errorf("default media type fallback failed: %#v", got.Content)
+	}
+}
+
+func TestResponsesAPI_AssistantMessageToolUseOnly(t *testing.T) {
+	items := convertResponsesAssistantMessage(llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{
+				ID: "c1", Name: "fn", Input: json.RawMessage(`{}`),
+			}},
+		},
+	})
+	if len(items) != 1 || items[0].Type != "function_call" || items[0].CallID != "c1" {
+		t.Errorf("expected single function_call item, got %#v", items)
+	}
+}
+
+func TestResponsesAPI_AssistantMessageNilToolUseSkipped(t *testing.T) {
+	items := convertResponsesAssistantMessage(llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			llm.TextBlock("hi"),
+			{Type: llm.BlockToolUse}, // ToolUse is nil
+		},
+	})
+	if len(items) != 1 || items[0].Type != "message" {
+		t.Errorf("expected only the text message item, got %#v", items)
+	}
+}
+
+func TestResponsesAPI_ToolMessageNonToolResultSkipped(t *testing.T) {
+	items := convertResponsesToolMessage(llm.Message{
+		Role: llm.RoleTool,
+		Content: []llm.ContentBlock{
+			llm.TextBlock("ignored"),
+			llm.ToolResultBlock("c1", "result", false),
+		},
+	})
+	if len(items) != 1 || items[0].CallID != "c1" {
+		t.Errorf("expected only the tool-result item, got %#v", items)
+	}
+}
+
+func TestResponsesAPI_ToolChoiceModes(t *testing.T) {
+	cases := []struct {
+		name string
+		tc   llm.ToolChoice
+		want any
+	}{
+		{"auto", llm.ToolChoice{Mode: llm.ToolChoiceAuto}, "auto"},
+		{"none", llm.ToolChoice{Mode: llm.ToolChoiceNone}, "none"},
+		{"required", llm.ToolChoice{Mode: llm.ToolChoiceRequired}, "required"},
+		{
+			"specific",
+			llm.ToolChoice{Mode: llm.ToolChoiceSpecific, Name: "get_weather"},
+			map[string]any{"type": "function", "name": "get_weather"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured map[string]any
+			srv := responsesEchoServer(t, &captured)
+			defer srv.Close()
+			c, _ := New(llm.Options{
+				APIKey:  "test-key",
+				Model:   "gpt-5",
+				BaseURL: srv.URL,
+				Retry:   llm.RetryConfig{Disabled: true},
+			})
+			if _, err := c.Chat(context.Background(), llm.ChatRequest{
+				Messages:   []llm.Message{llm.UserText("Hi")},
+				ToolChoice: &tc.tc,
+			}); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			switch want := tc.want.(type) {
+			case string:
+				if captured["tool_choice"] != want {
+					t.Errorf("tool_choice = %v, want %q", captured["tool_choice"], want)
+				}
+			case map[string]any:
+				got := captured["tool_choice"].(map[string]any)
+				if got["type"] != want["type"] || got["name"] != want["name"] {
+					t.Errorf("tool_choice = %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestResponsesAPI_ResponseFormatJSON(t *testing.T) {
+	var captured map[string]any
+	srv := responsesEchoServer(t, &captured)
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:       []llm.Message{llm.UserText("Hi")},
+		ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSON},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	text := captured["text"].(map[string]any)
+	format := text["format"].(map[string]any)
+	if format["type"] != "json_object" {
+		t.Errorf("text.format.type = %v, want json_object", format["type"])
+	}
+}
+
+func TestResponsesAPI_ResponseFormatJSONSchema(t *testing.T) {
+	var captured map[string]any
+	srv := responsesEchoServer(t, &captured)
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+		ResponseFormat: &llm.ResponseFormat{
+			Type:       llm.ResponseFormatJSONSchema,
+			JSONSchema: json.RawMessage(`{"type":"object"}`),
+		},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	format := captured["text"].(map[string]any)["format"].(map[string]any)
+	if format["type"] != "json_schema" || format["name"] != "response" || format["strict"] != true {
+		t.Errorf("text.format = %v, want json_schema/response/strict", format)
+	}
+}
+
+func TestResponsesAPI_IncompleteStatusMapsToMaxTokens(t *testing.T) {
+	// status:"incomplete" without incomplete_details still maps to
+	// StopReasonMaxTokens — the API uses this when output was cut off
+	// for reasons other than max_output_tokens (e.g. content filter).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "incomplete",
+			"output": []map[string]any{},
+			"usage":  map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+		})
+	}))
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.StopReason != llm.StopReasonMaxTokens {
+		t.Errorf("StopReason = %v, want %v", resp.StopReason, llm.StopReasonMaxTokens)
+	}
+}
+
+func TestResponsesAPI_RejectsDocumentBlock(t *testing.T) {
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: "https://example.invalid",
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			llm.UserBlocks(llm.DocumentBlock([]byte("%PDF"), "application/pdf", "doc.pdf")),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for document block")
+	}
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got %v", err)
+	}
+}
+
+func TestResponsesAPI_NetworkErrorReturnsBare(t *testing.T) {
+	// Point to a port that is guaranteed-closed so DoJSON returns a
+	// network-level error (status == 0).
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5",
+		BaseURL: "http://127.0.0.1:1",
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err == nil {
+		t.Fatal("expected network error")
+	}
+}
+
+func TestResponsesAPI_StreamHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit","type":"rate_limit_error"}}`))
+	}))
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	_, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, llm.ErrRateLimit) {
+		t.Errorf("expected ErrRateLimit, got %v", err)
+	}
+}
+
+func TestResponsesAPI_StreamMalformedJSONSurfacesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: not-json{{\n\n"))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range stream.Chunks {
+	}
+	if err := <-stream.Err; err == nil {
+		t.Fatal("expected decode error from stream")
+	}
+}
+
+func TestResponsesAPI_StreamResponseFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = w.Write([]byte(`data: {"type":"response.failed"}` + "\n\n"))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range stream.Chunks {
+	}
+	if err := <-stream.Err; err == nil || !errors.Is(err, llm.ErrProviderError) {
+		t.Errorf("expected ErrProviderError, got %v", err)
+	}
+}
+
+func TestResponsesAPI_StreamIgnoresEmptyDeltasAndUnknownItems(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		events := []string{
+			// Empty SSE data lines (also covered: [DONE] sentinel).
+			"\n\n",
+			"data: [DONE]\n\n",
+			// output_item.added for a non-function_call item — should be ignored.
+			`data: {"type":"response.output_item.added","item":{"type":"message"}}` + "\n\n",
+			// Empty deltas — should be skipped, not emit zero-length chunks.
+			`data: {"type":"response.output_text.delta","delta":""}` + "\n\n",
+			`data: {"type":"response.function_call_arguments.delta","delta":""}` + "\n\n",
+			// One real text delta so the consumer sees activity.
+			`data: {"type":"response.output_text.delta","delta":"ok"}` + "\n\n",
+			// completed with no usage payload — ChunkDone usage should be zero.
+			`data: {"type":"response.completed"}` + "\n\n",
+		}
+		for _, ev := range events {
+			_, _ = w.Write([]byte(ev))
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	c, _ := New(llm.Options{
+		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+		Retry: llm.RetryConfig{Disabled: true},
+	})
+	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("Hi")},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	var text []string
+	var done llm.StreamChunk
+	for chunk := range stream.Chunks {
+		switch chunk.Type {
+		case llm.ChunkText:
+			text = append(text, chunk.Text)
+		case llm.ChunkDone:
+			done = chunk
+		}
+	}
+	if err := <-stream.Err; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if strings.Join(text, "") != "ok" {
+		t.Errorf("text = %q, want %q", strings.Join(text, ""), "ok")
+	}
+	if done.Type != llm.ChunkDone {
+		t.Errorf("missing ChunkDone")
+	}
+	if done.Usage == nil || done.Usage.TotalTokens != 0 {
+		t.Errorf("expected zero usage on done, got %+v", done.Usage)
+	}
+}
+
+func TestResponsesAPI_FindExtensionAcceptsPointer(t *testing.T) {
+	exts := []llm.ProviderExtension{&Extension{ResponsesAPI: llm.Bool(true)}}
+	if !useResponsesAPI("gpt-4o", exts) {
+		t.Error("pointer Extension with ResponsesAPI=true should force routing")
+	}
+}
