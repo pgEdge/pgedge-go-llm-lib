@@ -430,7 +430,7 @@ does not match theirs, keeping requests forward-compatible.
 Helper: `FindExtension[T any](req ChatRequest, providerName string) *T`
 
 See `llm/provider/anthropic` for `Extension`, `WithToolCaching`,
-and `WithExtendedThinking`.
+`WithSystemCaching`, and `WithExtendedThinking`.
 
 ---
 
@@ -448,7 +448,8 @@ const CacheControlEphemeral CacheControlType = "ephemeral"
 
 Anthropic-specific. Set `Type: "ephemeral"` on a `ContentBlock`
 to mark it as a prompt-cache prefix boundary. In practice use
-`anthropic.WithToolCaching` rather than setting this directly.
+`anthropic.WithToolCaching` or `anthropic.WithSystemCaching`
+rather than setting this directly.
 
 ---
 

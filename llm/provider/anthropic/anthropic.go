@@ -176,8 +176,9 @@ type anthropicThinking struct {
 const anthropicDefaultMaxTokens = 4096
 
 type systemBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -312,9 +313,12 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicCha
 		}
 	}
 
-	// Anthropic-specific extension: tool caching and extended thinking.
-	// Looked up unconditionally — extended thinking does not require tools.
-	if ext := llm.FindExtension[Extension](req, "anthropic"); ext != nil {
+	// Anthropic-specific extension lookup. The CacheSystem branch is
+	// deferred until after ResponseFormat below, which may append
+	// further system blocks — the cache_control marker must land on the
+	// last block on the wire.
+	ext := llm.FindExtension[Extension](req, "anthropic")
+	if ext != nil {
 		if ext.CacheToolsThrough >= 0 && ext.CacheToolsThrough < len(aReq.Tools) {
 			aReq.Tools[ext.CacheToolsThrough].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
 		}
@@ -362,6 +366,12 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicCha
 			systemSuffix := fmt.Sprintf("Respond ONLY with valid JSON conforming to this schema:\n%s\nNo prose, no markdown fences.", string(req.ResponseFormat.JSONSchema))
 			aReq.System = append(aReq.System, systemBlock{Type: "text", Text: systemSuffix})
 		}
+	}
+
+	// System prompt caching is applied after ResponseFormat so the
+	// cache_control marker always lands on the final system block.
+	if ext != nil && ext.CacheSystem && len(aReq.System) > 0 {
+		aReq.System[len(aReq.System)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
 	}
 
 	// StopSequences: passed directly as stop_sequences.

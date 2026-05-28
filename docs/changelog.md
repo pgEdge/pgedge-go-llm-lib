@@ -11,6 +11,7 @@ project adheres to
 ## Unreleased
 
 ### Added
+- `anthropic.WithSystemCaching` helper that marks the system prompt as a cacheable prefix on Anthropic requests
 - Voyage AI as a fifth supported provider (embeddings, multimodal embeddings, reranking)
 - `Client.Rerank` method for reordering documents by query relevance
 - `Client.EmbedMultimodal` method for multimodal (text + images) embeddings
