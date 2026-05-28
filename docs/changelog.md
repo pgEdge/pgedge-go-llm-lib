@@ -19,6 +19,8 @@ project adheres to
 - New `ModelCapability` constants: `ModelCapabilityReranking`, `ModelCapabilityMultimodalEmbeddings`
 - Proxy HTTP routes: `POST /v1/embed`, `POST /v1/embed/multimodal`, `POST /v1/rerank`
 - `?capability=` query parameter on `GET /v1/models` (repeatable; AND semantics)
+- OpenAI provider auto-routes `o1`, `o3`, and `gpt-5` model families to `/v1/responses` (transparently translating the request/response wire shape); `openai.Extension.ResponsesAPI` overrides the auto-detection
+- `llm.Bool` helper for setting `*bool` option fields
 
 ### Changed
 - **Breaking (for external implementers of `llm.Client`):** `ListModels` and `ListModelsWithMetadata` are now variadic, accepting `...ListModelsOption`. Source-compatible for callers; interface change for external implementers.

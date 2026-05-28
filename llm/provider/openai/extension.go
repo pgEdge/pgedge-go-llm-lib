@@ -17,8 +17,8 @@ import (
 
 // Extension carries OpenAI-specific tunables that the unified Client
 // API does not surface directly. Attach via llm.Options.Extensions
-// (client-level); the OpenAI provider reads it on each Embed and
-// EmbedBatch call. Other providers ignore it.
+// (client-level); the OpenAI provider reads it on each Embed,
+// EmbedBatch, Chat, and ChatStream call. Other providers ignore it.
 type Extension struct {
 	// EmbeddingDimensions, when non-zero, asks OpenAI to return a
 	// lower-dimensional vector from a model that supports truncation
@@ -26,6 +26,14 @@ type Extension struct {
 	// large accepts up to 3072). Zero (default) omits the parameter and
 	// the model returns its native vector size.
 	EmbeddingDimensions int
+
+	// ResponsesAPI overrides automatic Chat-Completions vs. Responses
+	// routing. By default (nil), the provider auto-routes to
+	// /v1/responses for models that require it (o1*, o3*, gpt-5*) and
+	// /v1/chat/completions for all other models. Set to llm.Bool(true)
+	// to force the Responses API, or llm.Bool(false) to force the
+	// Chat Completions API for every Chat / ChatStream call.
+	ResponsesAPI *bool
 }
 
 // ProviderName returns "openai" so this extension is locatable in a

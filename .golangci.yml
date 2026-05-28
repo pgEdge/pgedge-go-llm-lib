@@ -127,7 +127,7 @@ linters:
           - revive
       # SSE streaming: the body is closed by the goroutine that owns
       # the stream, which bodyclose can't track across the closure.
-      - path: 'llm/provider/(anthropic|gemini|ollama|openai)/(anthropic|gemini|ollama|openai)\.go'
+      - path: 'llm/provider/(anthropic|gemini|ollama|openai)/(anthropic|gemini|ollama|openai|responses)\.go'
         linters:
           - bodyclose
 

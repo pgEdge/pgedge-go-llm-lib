@@ -75,6 +75,19 @@ of `max_tokens` for models that require the newer parameter.
 These models include those with `o1`, `o3`, or `gpt-5`
 prefixes.
 
+The provider automatically routes requests for `o1`, `o3`, and
+`gpt-5` models to the `/v1/responses` endpoint instead of
+`/v1/chat/completions`, because those models reject the older
+endpoint. The request and response wire shapes are translated
+transparently, so the same `Chat` and `ChatStream` calls work
+unchanged across model families. Override the auto-routing with
+`openai.Extension{ResponsesAPI: llm.Bool(true|false)}` on
+`Options.Extensions`: `llm.Bool(true)` forces every call to use
+`/v1/responses`, `llm.Bool(false)` keeps every call on
+`/v1/chat/completions`. The Responses API does not accept stop
+sequences, so requests that set `ChatRequest.StopSequences`
+return `llm.ErrNotSupported` when routed there.
+
 The `ListModels` method filters out non-chat models. The
 filter removes models with the following name prefixes:
 `text-embedding`, `embedding`, `tts`, `whisper`, `dall-e`,
