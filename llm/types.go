@@ -324,7 +324,26 @@ type Options struct {
 	// 120-second default. For streaming requests, this caps the time to
 	// receive the response headers and start of stream — the stream
 	// itself can run longer if the upstream keeps sending events.
+	//
+	// Because this budget spans every retry, a single attempt slow
+	// enough to exhaust it leaves no room to retry — the request fails
+	// with a timeout that cannot be retried. To make slow attempts
+	// retryable, set PerAttemptTimeout below RequestTimeout.
 	RequestTimeout time.Duration
+
+	// PerAttemptTimeout, when > 0, bounds each individual HTTP attempt.
+	// An attempt that stalls past it is abandoned and retried (subject
+	// to Retry), so a slow upstream — e.g. a heavy embedding batch that
+	// would otherwise burn the entire RequestTimeout in one attempt —
+	// becomes retryable instead of failing outright. It is derived from
+	// the request context, so a per-attempt timeout never cancels the
+	// caller's context. For streaming requests it bounds only the time
+	// to receive response headers; the stream body is not interrupted.
+	//
+	// Zero (default) disables per-attempt timeouts, preserving the
+	// historical behaviour where only RequestTimeout applies. Set it
+	// smaller than RequestTimeout to leave room for retries.
+	PerAttemptTimeout time.Duration
 
 	Retry RetryConfig
 

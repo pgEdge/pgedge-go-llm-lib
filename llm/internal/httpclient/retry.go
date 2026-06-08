@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -50,6 +51,12 @@ type RetryConfig struct {
 	MaxBackoff     time.Duration
 	Disabled       bool
 	OnRetry        func(RetryEvent)
+
+	// PerAttemptTimeout, when > 0, bounds each individual attempt. A
+	// stalled attempt that exceeds it is abandoned and (budget
+	// permitting) retried, so a slow upstream becomes retryable rather
+	// than consuming the caller's whole deadline. Zero disables it.
+	PerAttemptTimeout time.Duration
 }
 
 // ErrRetryBudgetExhausted is returned when MaxRetries has been
@@ -73,7 +80,7 @@ type RetryTransport struct {
 // RoundTrip implements http.RoundTripper.
 func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Config.Disabled || t.Config.MaxRetries <= 0 {
-		return t.Inner.RoundTrip(req)
+		return roundTripWithTimeout(t.Inner, req, t.Config.PerAttemptTimeout)
 	}
 
 	var bodyBytes []byte
@@ -104,7 +111,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 
-		resp, err := t.Inner.RoundTrip(req)
+		resp, err := roundTripWithTimeout(t.Inner, req, t.Config.PerAttemptTimeout)
 		if err != nil {
 			if attempt == t.Config.MaxRetries {
 				return nil, err
@@ -178,6 +185,77 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Unreachable: every iteration of the loop above either returns
 	// or continues. This satisfies the compiler.
 	return nil, ErrRetryBudgetExhausted
+}
+
+// roundTripWithTimeout runs a single attempt of req through inner. When
+// timeout > 0 the attempt is bounded by a context derived from the
+// request's own context: a stalled attempt fails with
+// context.DeadlineExceeded WITHOUT cancelling the caller's context, so
+// the retry loop is free to try again. When timeout <= 0 the attempt is
+// passed straight through.
+//
+// On a successful round trip the per-attempt timer is stopped and its
+// cancellation is deferred to the response Body's Close, so the timeout
+// never interrupts reads of a (possibly long-lived, streaming) body —
+// matching RequestTimeout's documented streaming semantics.
+func roundTripWithTimeout(inner http.RoundTripper, req *http.Request, timeout time.Duration) (*http.Response, error) {
+	if timeout <= 0 {
+		return inner.RoundTrip(req)
+	}
+
+	ctx, cancel := context.WithCancel(req.Context())
+	timer := time.AfterFunc(timeout, cancel)
+
+	resp, err := inner.RoundTrip(req.WithContext(ctx))
+
+	// timer.Stop reports false iff the timer already fired — i.e. the
+	// per-attempt budget elapsed and cancel() ran. We only ever call
+	// Stop once, so false unambiguously means "this attempt timed out".
+	timedOut := !timer.Stop()
+
+	if err != nil {
+		cancel()
+		// A per-attempt timeout surfaces as the caller's context being
+		// fine but our derived context being cancelled. Re-shape it as
+		// DeadlineExceeded so it is treated as a retryable timeout
+		// rather than a caller cancellation.
+		if timedOut && req.Context().Err() == nil {
+			return nil, fmt.Errorf("per-attempt timeout after %s: %w", timeout, context.DeadlineExceeded)
+		}
+		return nil, err
+	}
+
+	if timedOut {
+		// Boundary race: the timer fired just as the headers arrived, so
+		// the returned body is tied to a cancelled context. Treat it as a
+		// timeout rather than handing back a doomed body, and close that
+		// body so the connection is not leaked.
+		_ = resp.Body.Close()
+		cancel()
+		if req.Context().Err() == nil {
+			return nil, fmt.Errorf("per-attempt timeout after %s: %w", timeout, context.DeadlineExceeded)
+		}
+		return nil, req.Context().Err()
+	}
+
+	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelBody wraps a response body so that closing it releases the
+// per-attempt context. context.CancelFunc is safe to call more than
+// once, so no additional guarding is needed.
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+// Close closes the underlying body and then releases the per-attempt
+// context.
+func (b *cancelBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 // parseRetryAfter parses the Retry-After header value. Accepts both

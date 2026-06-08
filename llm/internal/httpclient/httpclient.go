@@ -89,7 +89,10 @@ func New(base *http.Client, headers map[string]string, retry RetryConfig, timeou
 		inner = base.Transport
 	}
 
-	if !retry.Disabled && retry.MaxRetries > 0 {
+	// The RetryTransport also enforces per-attempt timeouts, so it is
+	// installed whenever retries are enabled OR a per-attempt timeout is
+	// configured (even with retries disabled).
+	if (!retry.Disabled && retry.MaxRetries > 0) || retry.PerAttemptTimeout > 0 {
 		inner = &RetryTransport{Inner: inner, Config: retry}
 	}
 	if len(headers) > 0 {

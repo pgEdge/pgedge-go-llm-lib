@@ -421,6 +421,16 @@ func TestNewInstallsRetryTransport(t *testing.T) {
 	}
 }
 
+func TestNewInstallsRetryTransportForPerAttemptTimeout(t *testing.T) {
+	// Even with retries disabled, a per-attempt timeout requires the
+	// RetryTransport so the timeout is enforced per attempt.
+	cfg := RetryConfig{Disabled: true, PerAttemptTimeout: time.Second}
+	c := New(nil, nil, cfg, 0)
+	if _, ok := c.Transport.(*RetryTransport); !ok {
+		t.Errorf("Transport = %T, want *RetryTransport when PerAttemptTimeout is set", c.Transport)
+	}
+}
+
 func TestNewSkipsRetryWhenDisabled(t *testing.T) {
 	c := New(nil, nil, RetryConfig{Disabled: true}, 0)
 	if _, ok := c.Transport.(*RetryTransport); ok {

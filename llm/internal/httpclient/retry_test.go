@@ -570,6 +570,142 @@ type errorReader struct{}
 func (errorReader) Read([]byte) (int, error) { return 0, fmt.Errorf("body explode") }
 func (errorReader) Close() error             { return nil }
 
+func TestRetryTransportRetriesPerAttemptTimeout(t *testing.T) {
+	// The first attempt stalls past the per-attempt timeout; the retry
+	// layer must abandon it and retry, with the second attempt
+	// succeeding. This is the Gemini batchEmbedContents failure mode: a
+	// slow request that previously consumed the whole budget and could
+	// not be retried.
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(2 * time.Second):
+			}
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := testRetryConfig()
+	cfg.PerAttemptTimeout = 50 * time.Millisecond
+
+	client := &http.Client{Transport: &RetryTransport{Inner: http.DefaultTransport, Config: cfg}}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(&attempts); got < 2 {
+		t.Errorf("attempts = %d, want >= 2 (per-attempt timeout should be retried)", got)
+	}
+}
+
+func TestRetryTransportPerAttemptTimeoutExhaustsBudget(t *testing.T) {
+	// Every attempt stalls past the per-attempt timeout. Once the retry
+	// budget is exhausted the final error must surface the timeout.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	cfg := RetryConfig{
+		MaxRetries:        2,
+		InitialBackoff:    time.Millisecond,
+		MaxBackoff:        5 * time.Millisecond,
+		PerAttemptTimeout: 30 * time.Millisecond,
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	rt := &RetryTransport{Inner: http.DefaultTransport, Config: cfg}
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("want timeout error after budget exhausted, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want DeadlineExceeded", err)
+	}
+}
+
+func TestRetryTransportPerAttemptTimeoutDoesNotInterruptBody(t *testing.T) {
+	// Headers arrive quickly (within the per-attempt timeout) but the
+	// response body trickles in with a gap LONGER than the per-attempt
+	// timeout. A correct implementation detaches the per-attempt timer
+	// once the response is returned, so the body read is not killed —
+	// this is the streaming/SSE case.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("ResponseWriter is not a Flusher")
+			return
+		}
+		_, _ = io.WriteString(w, "data: first\n")
+		fl.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+		_, _ = io.WriteString(w, "data: second\n")
+		fl.Flush()
+	}))
+	defer srv.Close()
+
+	cfg := testRetryConfig()
+	cfg.PerAttemptTimeout = 60 * time.Millisecond
+
+	client := &http.Client{Transport: &RetryTransport{Inner: http.DefaultTransport, Config: cfg}}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v (per-attempt timeout should not interrupt body)", err)
+	}
+	if !strings.Contains(string(body), "second") {
+		t.Errorf("body truncated by per-attempt timeout: %q", body)
+	}
+}
+
+func TestRoundTripPerAttemptTimeoutWithRetriesDisabled(t *testing.T) {
+	// With retries disabled but a per-attempt timeout set, a single
+	// attempt must still be bounded by the timeout.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	rt := &RetryTransport{
+		Inner:  http.DefaultTransport,
+		Config: RetryConfig{Disabled: true, PerAttemptTimeout: 30 * time.Millisecond},
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("want timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want DeadlineExceeded", err)
+	}
+}
+
 func TestRoundTripZeroMaxRetriesShortCircuits(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
