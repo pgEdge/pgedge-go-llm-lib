@@ -228,7 +228,9 @@ func roundTripWithTimeout(inner http.RoundTripper, req *http.Request, timeout ti
 	if timedOut {
 		// Boundary race: the timer fired just as the headers arrived, so
 		// the returned body is tied to a cancelled context. Treat it as a
-		// timeout rather than handing back a doomed body.
+		// timeout rather than handing back a doomed body, and close that
+		// body so the connection is not leaked.
+		_ = resp.Body.Close()
 		cancel()
 		if req.Context().Err() == nil {
 			return nil, fmt.Errorf("per-attempt timeout after %s: %w", timeout, context.DeadlineExceeded)
