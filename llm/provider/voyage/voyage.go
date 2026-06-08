@@ -60,6 +60,8 @@ func New(opts llm.Options) (llm.Client, error) {
 		InitialBackoff: opts.Retry.InitialBackoff,
 		MaxBackoff:     opts.Retry.MaxBackoff,
 		Disabled:       opts.Retry.Disabled,
+
+		PerAttemptTimeout: opts.PerAttemptTimeout,
 	}
 	if opts.OnRetry != nil {
 		hook := opts.OnRetry

@@ -11,6 +11,7 @@ project adheres to
 ## Unreleased
 
 ### Added
+- `Options.PerAttemptTimeout`: an optional per-attempt wall-clock cap that makes a slow individual attempt retryable, instead of letting it consume the whole `RequestTimeout` budget with no room to retry. Derived from the request context so it never cancels the caller's context, and detached on success so it does not interrupt a streaming response body
 - `anthropic.WithSystemCaching` helper that marks the system prompt as a cacheable prefix on Anthropic requests
 - Voyage AI as a fifth supported provider (embeddings, multimodal embeddings, reranking)
 - `Client.Rerank` method for reordering documents by query relevance
