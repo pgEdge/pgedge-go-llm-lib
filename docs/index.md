@@ -1,3 +1,8 @@
+<div class="banner" markdown>
+![pgEdge Labs](img/pgedge-labs-light.svg#only-light){ width="320" }
+![pgEdge Labs](img/pgedge-labs-dark.svg#only-dark){ width="320" }
+</div>
+
 # pgEdge Go LLM Library
 
 pgEdge Go LLM Library is a unified Go library for interacting

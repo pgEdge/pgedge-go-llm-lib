@@ -1,3 +1,10 @@
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/pgedge-labs-dark.svg">
+    <img alt="pgEdge Labs" src="docs/img/pgedge-labs-light.svg" width="320">
+  </picture>
+</div>
+
 # pgEdge Go LLM Library
 
 [![CI - Build](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-build.yml/badge.svg)](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-build.yml)
