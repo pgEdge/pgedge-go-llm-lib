@@ -143,6 +143,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !p.authorize(w, r) {
 		return
 	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
+	}
 
 	req, opts, provider, model, err := p.parseChatRequest(r)
 	if err != nil {
@@ -316,6 +319,9 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if !p.authorize(w, r) {
 		return
 	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
+	}
 
 	req, opts, provider, model, err := p.parseChatRequest(r)
 	if err != nil {
@@ -404,6 +410,9 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	if !p.authorize(w, r) {
 		return
 	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
+	}
 	var req EmbedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, r, ErrorInfo{StatusCode: http.StatusBadRequest, Err: err, RequestID: reqID})
@@ -457,6 +466,9 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 	}
 	if !p.authorize(w, r) {
 		return
+	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
 	}
 	var req RerankRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

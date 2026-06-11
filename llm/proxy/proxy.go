@@ -61,6 +61,10 @@ type Config struct {
 	// entirely of slashes is also treated as empty and falls back to "/v1".
 	// A leading slash is added and a trailing slash trimmed during normalisation.
 	PathPrefix string
+
+	// MaxBodyBytes limits the request body size for /chat, /chat/stream,
+	// /embed, and /rerank. 0 means unlimited.
+	MaxBodyBytes int64
 }
 
 // RequestInfo describes an incoming chat request, supplied to OnRequest.

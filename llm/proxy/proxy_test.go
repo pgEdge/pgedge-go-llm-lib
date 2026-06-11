@@ -1915,3 +1915,180 @@ func TestHandlerWithSlashPrefixFallsBackToDefault(t *testing.T) {
 		t.Fatalf("/v1/health with PathPrefix='/' status = %d, want 200", resp.StatusCode)
 	}
 }
+
+// TestChatRejectsOversizedBody verifies that a MaxBodyBytes limit is
+// enforced for POST /v1/chat, returning 400 when the body exceeds the
+// configured ceiling.
+func TestChatRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'a')
+	}
+	big = append(big, []byte(`"}]}]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized body", resp.StatusCode)
+	}
+}
+
+// TestChatStreamRejectsOversizedBody verifies the MaxBodyBytes limit on
+// POST /v1/chat/stream.
+func TestChatStreamRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'a')
+	}
+	big = append(big, []byte(`"}]}]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/chat/stream", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized body", resp.StatusCode)
+	}
+}
+
+// TestEmbedRejectsOversizedBody verifies the MaxBodyBytes limit on
+// POST /v1/embed.
+func TestEmbedRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{embedVec: [][]float64{{0.1}}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"provider":"fake","input":["`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'x')
+	}
+	big = append(big, []byte(`"]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/embed", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized embed body", resp.StatusCode)
+	}
+}
+
+// TestRerankRejectsOversizedBody verifies the MaxBodyBytes limit on
+// POST /v1/rerank.
+func TestRerankRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{rerankResp: &llm.RerankResponse{
+		Results: []llm.RerankResult{{Index: 0, RelevanceScore: 0.9}},
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"provider":"fake","query":"q","documents":["`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'd')
+	}
+	big = append(big, []byte(`"]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/rerank", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized rerank body", resp.StatusCode)
+	}
+}
+
+// TestMaxBodyBytesZeroAllowsNormalRequest verifies that when MaxBodyBytes
+// is 0 (unlimited), a normal-sized request succeeds with 200.
+func TestMaxBodyBytesZeroAllowsNormalRequest(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    0,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hello")},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 when MaxBodyBytes=0 (unlimited)", resp.StatusCode)
+	}
+}
+
+// TestMaxBodyBytesGenerousLimitAllowsNormalRequest verifies that a
+// generous MaxBodyBytes limit does not block a normal-sized request.
+func TestMaxBodyBytesGenerousLimitAllowsNormalRequest(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    1 << 20, // 1 MiB — generous for a normal request
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hello")},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with generous MaxBodyBytes", resp.StatusCode)
+	}
+}
