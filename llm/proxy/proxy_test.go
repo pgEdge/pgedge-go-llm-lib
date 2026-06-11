@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
@@ -2090,5 +2091,162 @@ func TestMaxBodyBytesGenerousLimitAllowsNormalRequest(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 with generous MaxBodyBytes", resp.StatusCode)
+	}
+}
+
+// TestTransformRequestMutatesChat verifies the TransformRequest hook can
+// rewrite the request and that the mutation reaches the provider's Chat
+// call. The fake captures the dispatched request in f.chatReq.
+func TestTransformRequestMutatesChat(t *testing.T) {
+	f := &fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}}
+	setFake(f)
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, req *llm.ChatRequest) error {
+			req.SystemPrompt = "INJECTED"
+			return nil
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	f.mu.RLock()
+	got := f.chatReq
+	f.mu.RUnlock()
+	if got == nil {
+		t.Fatal("provider did not receive a Chat request")
+	}
+	if got.SystemPrompt != "INJECTED" {
+		t.Fatalf("provider saw SystemPrompt = %q, want INJECTED", got.SystemPrompt)
+	}
+}
+
+type transformErr struct{ status int }
+
+func (transformErr) Error() string     { return "denied" }
+func (e transformErr) HTTPStatus() int { return e.status }
+
+// TestTransformRequestRejectsWithStatus verifies a TransformRequest error
+// carrying an HTTPStatus() method rejects the request with that status.
+func TestTransformRequestRejectsWithStatus(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{StopReason: "stop"}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+			return transformErr{status: http.StatusForbidden}
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, _ := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestTransformRequestRejectsDefaultStatus verifies a plain error from
+// TransformRequest (no HTTPStatus method) yields the default 400.
+func TestTransformRequestRejectsDefaultStatus(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{StopReason: "stop"}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+			return errors.New("nope")
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, _ := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestTransformRequestMutatesStream verifies the hook also fires on the
+// streaming path and that the mutation reaches ChatStream. The streamFn
+// captures the request the proxy dispatched.
+func TestTransformRequestMutatesStream(t *testing.T) {
+	var mu sync.Mutex
+	var seen string
+	f := &fakeProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+			mu.Lock()
+			seen = req.SystemPrompt
+			mu.Unlock()
+			return nil, llm.ErrNotSupported
+		},
+	}
+	setFake(f)
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, req *llm.ChatRequest) error {
+			req.SystemPrompt = "STREAM-INJECTED"
+			return nil
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat/stream", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	mu.Lock()
+	got := seen
+	mu.Unlock()
+	if got != "STREAM-INJECTED" {
+		t.Fatalf("ChatStream saw SystemPrompt = %q, want STREAM-INJECTED", got)
+	}
+}
+
+// TestTransformRequestStreamRejectsWithStatus verifies that a rejection
+// before the stream starts yields a non-200 status on the streaming
+// endpoint, because the transform runs before SSE headers are written.
+func TestTransformRequestStreamRejectsWithStatus(t *testing.T) {
+	setFake(&fakeProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest) (*llm.Stream, error) {
+			return nil, llm.ErrNotSupported
+		},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+			return transformErr{status: http.StatusForbidden}
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, _ := http.Post(srv.URL+"/v1/chat/stream", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 }

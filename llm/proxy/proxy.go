@@ -50,6 +50,14 @@ type Config struct {
 	// /v1/models, and /v1/health.
 	Authorize func(*http.Request) error
 
+	// TransformRequest, if set, is invoked after the request is parsed and
+	// before it is dispatched to the provider. It MAY mutate the request
+	// (SystemPrompt, Messages, Tools). Returning a non-nil error rejects the
+	// request with status 400, overridable via an HTTPStatus() int method on
+	// the error. This is the sanctioned request-rewrite hook; do not mutate
+	// via OnRequest.
+	TransformRequest func(r *http.Request, req *llm.ChatRequest) error
+
 	// RequestIDHeader is the header name to read for an incoming
 	// request ID and write on outgoing responses. Defaults to
 	// "X-Request-ID" when empty. Set to "-" to disable request-ID
@@ -203,6 +211,27 @@ func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request) bool {
 			status = hs.HTTPStatus()
 		}
 		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err})
+		return false
+	}
+	return true
+}
+
+// transform runs the TransformRequest hook (if configured) against the
+// already-built llm.ChatRequest, before dispatch to the provider. The
+// hook MAY mutate llmReq in place. Returns true if the request should
+// proceed, false if it was rejected (writeError was called with status
+// 400 by default, overridable via an HTTPStatus() int method on the
+// returned error).
+func (p *Proxy) transform(w http.ResponseWriter, r *http.Request, reqID string, llmReq *llm.ChatRequest) bool {
+	if p.cfg.TransformRequest == nil {
+		return true
+	}
+	if err := p.cfg.TransformRequest(r, llmReq); err != nil {
+		status := http.StatusBadRequest
+		if hs, ok := err.(interface{ HTTPStatus() int }); ok {
+			status = hs.HTTPStatus()
+		}
+		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err, RequestID: reqID})
 		return false
 	}
 	return true

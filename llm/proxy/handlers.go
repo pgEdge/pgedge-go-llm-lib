@@ -154,6 +154,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	llmReq := buildLLMRequest(req)
+	if !p.transform(w, r, reqID, &llmReq) {
+		return
+	}
 	if p.cfg.OnRequest != nil {
 		p.cfg.OnRequest(r, RequestInfo{
 			Provider:  provider,
@@ -330,6 +333,9 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	llmReq := buildLLMRequest(req)
+	if !p.transform(w, r, reqID, &llmReq) {
+		return
+	}
 	if p.cfg.OnRequest != nil {
 		p.cfg.OnRequest(r, RequestInfo{
 			Provider:  provider,
