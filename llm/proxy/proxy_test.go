@@ -794,6 +794,44 @@ func TestAuthorizeRejectsWithCustomStatus(t *testing.T) {
 	}
 }
 
+// TestAuthorizeRejectionForwardsRequestID verifies that an Authorize
+// rejection threads the request ID into OnError, matching the
+// behaviour of every other error path.
+func TestAuthorizeRejectionForwardsRequestID(t *testing.T) {
+	setFake(&fakeProvider{})
+	var gotReqID string
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		Authorize: func(*http.Request) error {
+			return fmt.Errorf("nope")
+		},
+		OnError: func(_ *http.Request, info proxy.ErrorInfo) {
+			gotReqID = info.RequestID
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "auth-reqid-42")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	if gotReqID != "auth-reqid-42" {
+		t.Errorf("OnError RequestID = %q, want auth-reqid-42", gotReqID)
+	}
+}
+
 func TestAuthorizeAllowsWhenNil(t *testing.T) {
 	setFake(&fakeProvider{
 		chatResp: &llm.ChatResponse{Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "ok"}}, StopReason: llm.StopReasonEndTurn},
@@ -2248,5 +2286,12 @@ func TestTransformRequestStreamRejectsWithStatus(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	// The rejection happens before any SSE framing begins, so the
+	// response must be a JSON error rather than an event stream.
+	if ct := resp.Header.Get("Content-Type"); ct == "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want non-SSE (SSE framing must not begin)", ct)
+	} else if ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
 }

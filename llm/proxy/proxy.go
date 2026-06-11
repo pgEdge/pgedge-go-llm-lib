@@ -35,7 +35,8 @@ type Config struct {
 	Providers       map[string]llm.Options
 
 	// Hooks are invoked for telemetry / auth side-effects. They run
-	// synchronously in the request goroutine; keep them fast.
+	// synchronously in the request goroutine; keep them fast. A panic
+	// in any of these hooks aborts the request and is not recovered.
 	OnRequest  func(r *http.Request, info RequestInfo)
 	OnResponse func(r *http.Request, info ResponseInfo)
 	OnError    func(r *http.Request, info ErrorInfo)
@@ -48,6 +49,9 @@ type Config struct {
 	//
 	// Authorize fires for every endpoint including GET /v1/providers,
 	// /v1/models, and /v1/health.
+	//
+	// Authorize runs synchronously in the request goroutine; a panic in
+	// the hook aborts the request and is not recovered.
 	Authorize func(*http.Request) error
 
 	// TransformRequest, if set, is invoked after the request is parsed and
@@ -56,6 +60,13 @@ type Config struct {
 	// request with status 400, overridable via an HTTPStatus() int method on
 	// the error. This is the sanctioned request-rewrite hook; do not mutate
 	// via OnRequest.
+	//
+	// OnRequest (and any telemetry) observes the request AFTER
+	// TransformRequest has run: it sees the final dispatched request,
+	// including any mutations TransformRequest applied.
+	//
+	// TransformRequest runs synchronously in the request goroutine; a
+	// panic in the hook aborts the request and is not recovered.
 	TransformRequest func(r *http.Request, req *llm.ChatRequest) error
 
 	// RequestIDHeader is the header name to read for an incoming
@@ -81,7 +92,9 @@ type Config struct {
 // hand to the provider, with messages, tools, system prompt,
 // tool-choice, response format, and stop sequences populated. It is
 // nil only when the request failed to parse before this hook fires
-// (in which case OnError fires instead).
+// (in which case OnError fires instead). The request reflects any
+// mutations applied by TransformRequest: it is the post-transform,
+// about-to-be-dispatched request.
 //
 // Hooks that want to log prompt content, tool definitions, or
 // per-request overrides read this field. The pointer is to a value
@@ -198,19 +211,26 @@ func randomRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// httpStatusOf returns the HTTP status an error requests via an
+// HTTPStatus() int method, or fallback if it does not implement one.
+func httpStatusOf(err error, fallback int) int {
+	if hs, ok := err.(interface{ HTTPStatus() int }); ok {
+		return hs.HTTPStatus()
+	}
+	return fallback
+}
+
 // authorize runs the Authorize hook (if configured). Returns true
 // if the request should proceed, false if it was rejected (writeError
-// was called with an appropriate status).
-func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request) bool {
+// was called with an appropriate status). reqID is threaded into the
+// ErrorInfo so rejections carry the request ID like every other error.
+func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request, reqID string) bool {
 	if p.cfg.Authorize == nil {
 		return true
 	}
 	if err := p.cfg.Authorize(r); err != nil {
-		status := http.StatusUnauthorized
-		if hs, ok := err.(interface{ HTTPStatus() int }); ok {
-			status = hs.HTTPStatus()
-		}
-		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err})
+		status := httpStatusOf(err, http.StatusUnauthorized)
+		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err, RequestID: reqID})
 		return false
 	}
 	return true
@@ -227,10 +247,7 @@ func (p *Proxy) transform(w http.ResponseWriter, r *http.Request, reqID string, 
 		return true
 	}
 	if err := p.cfg.TransformRequest(r, llmReq); err != nil {
-		status := http.StatusBadRequest
-		if hs, ok := err.(interface{ HTTPStatus() int }); ok {
-			status = hs.HTTPStatus()
-		}
+		status := httpStatusOf(err, http.StatusBadRequest)
 		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err, RequestID: reqID})
 		return false
 	}

@@ -27,7 +27,7 @@ func (p *Proxy) handleProviders(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 
@@ -55,7 +55,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 
@@ -140,7 +140,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -274,7 +274,7 @@ func (p *Proxy) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 
@@ -319,7 +319,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -413,7 +413,7 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -470,7 +470,7 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -539,7 +539,7 @@ func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, reqID) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxEmbedMultimodalBodyBytes)
