@@ -230,6 +230,20 @@ func (u *TokenUsage) Add(other TokenUsage) {
 	u.CacheReadInputTokens += other.CacheReadInputTokens
 }
 
+// CacheSavingsPercent returns the percentage of input tokens that were
+// served from the prompt cache: CacheReadInputTokens relative to the total
+// input tokens (PromptTokens + CacheReadInputTokens +
+// CacheCreationInputTokens). It returns 0 when there is no input or no
+// cache read. Only Anthropic currently populates the cache token fields;
+// for other providers this is always 0.
+func (u TokenUsage) CacheSavingsPercent() float64 {
+	totalInput := u.PromptTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	if totalInput == 0 || u.CacheReadInputTokens == 0 {
+		return 0
+	}
+	return float64(u.CacheReadInputTokens) / float64(totalInput) * 100
+}
+
 // RetryEvent describes a single retry attempt that just failed.
 // Supplied to Options.OnRetry just before the retry layer sleeps
 // and retries.

@@ -511,6 +511,26 @@ func TestIntHelper(t *testing.T) {
 	}
 }
 
+func TestTokenUsageCacheSavingsPercent(t *testing.T) {
+	cases := []struct {
+		name string
+		u    TokenUsage
+		want float64
+	}{
+		{"zero", TokenUsage{}, 0},
+		{"no cache", TokenUsage{PromptTokens: 100}, 0},
+		{"half cached", TokenUsage{PromptTokens: 50, CacheReadInputTokens: 50}, 50},
+		{"with creation", TokenUsage{PromptTokens: 0, CacheReadInputTokens: 90, CacheCreationInputTokens: 10}, 90},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.u.CacheSavingsPercent(); got != c.want {
+				t.Fatalf("CacheSavingsPercent() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestToolChoiceJSONTags(t *testing.T) {
 	tc := ToolChoice{Mode: ToolChoiceSpecific, Name: "get_weather"}
 	b, err := json.Marshal(tc)
