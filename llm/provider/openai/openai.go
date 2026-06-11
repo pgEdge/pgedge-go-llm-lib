@@ -312,13 +312,22 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRe
 
 	// Tools.
 	if len(req.Tools) > 0 {
+		useCompact := false
+		switch req.ToolDescriptions {
+		case llm.ToolDescriptionCompact:
+			useCompact = true
+		case llm.ToolDescriptionFull:
+			useCompact = false
+		default: // "" (Default) or "auto"
+			useCompact = httpclient.IsLocalBaseURL(c.baseURL)
+		}
 		oaiReq.Tools = make([]openaiTool, len(req.Tools))
 		for i, t := range req.Tools {
 			oaiReq.Tools[i] = openaiTool{
 				Type: "function",
 				Function: openaiToolDef{
 					Name:        t.Name,
-					Description: t.Description,
+					Description: llm.EffectiveToolDescription(t, useCompact),
 					Parameters:  t.InputSchema,
 				},
 			}

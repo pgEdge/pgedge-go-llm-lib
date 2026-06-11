@@ -345,11 +345,20 @@ func (c *client) buildChatRequest(req llm.ChatRequest) geminiRequest {
 
 	// Tools.
 	if len(req.Tools) > 0 {
+		useCompact := false
+		switch req.ToolDescriptions {
+		case llm.ToolDescriptionCompact:
+			useCompact = true
+		case llm.ToolDescriptionFull:
+			useCompact = false
+		default: // "" (Default) or "auto"
+			useCompact = httpclient.IsLocalBaseURL(c.baseURL)
+		}
 		decls := make([]geminiFunctionDeclaration, len(req.Tools))
 		for i, t := range req.Tools {
 			decls[i] = geminiFunctionDeclaration{
 				Name:        t.Name,
-				Description: t.Description,
+				Description: llm.EffectiveToolDescription(t, useCompact),
 				Parameters:  t.InputSchema,
 			}
 		}

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -241,4 +242,23 @@ func ValidateBaseURL(baseURL, providerName string) (string, error) {
 		return "", fmt.Errorf("%s base URL must include a host", providerName)
 	}
 	return baseURL, nil
+}
+
+// IsLocalBaseURL reports whether the URL points at a local/loopback host
+// (localhost, 127.0.0.0/8, ::1, or a *.local name). Used to auto-select
+// compact tool descriptions for local models.
+func IsLocalBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	switch {
+	case host == "localhost", host == "::1", strings.HasSuffix(host, ".local"):
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

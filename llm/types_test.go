@@ -591,3 +591,44 @@ func TestModelInfoDimensionsJSON(t *testing.T) {
 		t.Fatalf("zero dimensions should be omitted: %s", b2)
 	}
 }
+
+func TestToolCompactDescriptionJSON(t *testing.T) {
+	tool := Tool{
+		Name:               "get_weather",
+		Description:        "Get the current weather for a named city in detail",
+		CompactDescription: "short",
+		InputSchema:        json.RawMessage(`{"type":"object"}`),
+	}
+	data, err := json.Marshal(tool)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"compact_description":"short"`) {
+		t.Errorf("expected compact_description in JSON, got %s", data)
+	}
+
+	// Omitted when empty.
+	tool.CompactDescription = ""
+	data, err = json.Marshal(tool)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	if strings.Contains(string(data), "compact_description") {
+		t.Errorf("expected compact_description omitted, got %s", data)
+	}
+}
+
+func TestEffectiveToolDescription(t *testing.T) {
+	full := Tool{Description: "the full description", CompactDescription: "compact"}
+	noCompact := Tool{Description: "only full"}
+
+	if got := EffectiveToolDescription(full, true); got != "compact" {
+		t.Errorf("useCompact=true: got %q, want %q", got, "compact")
+	}
+	if got := EffectiveToolDescription(full, false); got != "the full description" {
+		t.Errorf("useCompact=false: got %q, want %q", got, "the full description")
+	}
+	if got := EffectiveToolDescription(noCompact, true); got != "only full" {
+		t.Errorf("useCompact=true, no compact: got %q, want %q", got, "only full")
+	}
+}

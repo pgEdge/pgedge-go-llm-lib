@@ -500,3 +500,27 @@ func TestValidateBaseURLRejectsEmptyHost(t *testing.T) {
 		t.Errorf("error should mention the host: %v", err)
 	}
 }
+
+func TestIsLocalBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"localhost", "http://localhost:11434", true},
+		{"loopback v4", "http://127.0.0.1:8080", true},
+		{"loopback v6", "http://[::1]:1234", true},
+		{"dot-local name", "http://host.local", true},
+		{"openai remote", "https://api.openai.com/v1", false},
+		{"anthropic remote", "https://api.anthropic.com", false},
+		{"private but routable", "http://10.0.0.5", false},
+		{"malformed", "http://[::1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsLocalBaseURL(tt.raw); got != tt.want {
+				t.Errorf("IsLocalBaseURL(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}

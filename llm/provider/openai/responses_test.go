@@ -250,6 +250,43 @@ func TestResponsesAPI_ToolsWireShape(t *testing.T) {
 	}
 }
 
+func TestResponsesAPI_ToolsCompactDescription(t *testing.T) {
+	var captured map[string]any
+	srv := responsesEchoServer(t, &captured)
+	defer srv.Close()
+
+	c, err := New(llm.Options{
+		APIKey:  "test-key",
+		Model:   "gpt-5",
+		BaseURL: srv.URL,
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:         []llm.Message{llm.UserText("Weather?")},
+		ToolDescriptions: llm.ToolDescriptionCompact,
+		Tools: []llm.Tool{{
+			Name:               "get_weather",
+			Description:        "FULL DESCRIPTION should not appear",
+			CompactDescription: "compact weather desc",
+			InputSchema:        json.RawMessage(`{"type":"object"}`),
+		}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	tools := captured["tools"].([]any)
+	tool := tools[0].(map[string]any)
+	if tool["description"] != "compact weather desc" {
+		t.Errorf("expected compact description, got %v", tool["description"])
+	}
+	if d, _ := tool["description"].(string); strings.Contains(d, "FULL DESCRIPTION") {
+		t.Errorf("did not expect full description, got %v", tool["description"])
+	}
+}
+
 func TestResponsesAPI_ParsesToolCall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

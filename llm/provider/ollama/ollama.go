@@ -195,7 +195,16 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 }
 
 func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) (ollamaChatRequest, error) {
-	msgs, err := c.convertMessages(req)
+	useCompact := false
+	switch req.ToolDescriptions {
+	case llm.ToolDescriptionCompact:
+		useCompact = true
+	case llm.ToolDescriptionFull:
+		useCompact = false
+	default: // "" (Default) or "auto"
+		useCompact = httpclient.IsLocalBaseURL(c.baseURL)
+	}
+	msgs, err := c.convertMessages(req, useCompact)
 	if err != nil {
 		return ollamaChatRequest{}, err
 	}
@@ -244,7 +253,7 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) (ollamaChatR
 //     matching the format Ollama models emit when calling tools.
 //   - BlockToolResult: emitted as a role:"tool" message with the
 //     result text as content.
-func (c *client) convertMessages(req llm.ChatRequest) ([]ollamaMessage, error) {
+func (c *client) convertMessages(req llm.ChatRequest, useCompact bool) ([]ollamaMessage, error) {
 	var msgs []ollamaMessage
 
 	// Build system prompt: per-request only (no client-level default).
@@ -252,7 +261,7 @@ func (c *client) convertMessages(req llm.ChatRequest) ([]ollamaMessage, error) {
 
 	// If tools are provided, inject tool instructions into the system prompt.
 	if len(req.Tools) > 0 {
-		toolInstructions := buildToolInstructions(req.Tools)
+		toolInstructions := buildToolInstructions(req.Tools, useCompact)
 		if sysPrompt != "" {
 			sysPrompt = sysPrompt + "\n\n" + toolInstructions
 		} else {
@@ -342,14 +351,14 @@ func convertMessage(m llm.Message) ([]ollamaMessage, error) {
 	return out, nil
 }
 
-func buildToolInstructions(tools []llm.Tool) string {
+func buildToolInstructions(tools []llm.Tool, useCompact bool) string {
 	var sb strings.Builder
 	sb.WriteString("You have access to the following tools. When you need to call a tool, respond ONLY with a JSON object in this exact format:\n")
 	sb.WriteString(`{"tool":"tool_name","arguments":{...}}`)
 	sb.WriteString("\n\nAvailable tools:\n")
 
 	for _, t := range tools {
-		fmt.Fprintf(&sb, "- %s: %s", t.Name, t.Description)
+		fmt.Fprintf(&sb, "- %s: %s", t.Name, llm.EffectiveToolDescription(t, useCompact))
 		if len(t.InputSchema) > 0 {
 			fmt.Fprintf(&sb, " (parameters: %s)", string(t.InputSchema))
 		}

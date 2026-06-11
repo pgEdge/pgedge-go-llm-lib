@@ -213,6 +213,45 @@ func TestChatWithTools(t *testing.T) {
 	}
 }
 
+func TestChatToolsCompactDescription(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"},
+			},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:         []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ToolDescriptions: llm.ToolDescriptionCompact,
+		Tools: []llm.Tool{
+			{
+				Name:               "get_weather",
+				Description:        "FULL DESCRIPTION should not appear",
+				CompactDescription: "compact weather desc",
+				InputSchema:        json.RawMessage(`{"type":"object"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotBody, "compact weather desc") {
+		t.Errorf("expected compact description in body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, "FULL DESCRIPTION") {
+		t.Errorf("did not expect full description in body, got %s", gotBody)
+	}
+}
+
 func TestChatWithSystemPrompt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

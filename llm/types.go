@@ -102,9 +102,14 @@ type ToolUse struct {
 
 // Tool defines a tool/function available for the LLM to call.
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// CompactDescription is an optional shorter description used when a
+	// caller (or the auto policy) selects compact tool descriptions —
+	// see ToolDescriptionMode and EffectiveToolDescription. When empty,
+	// the full Description is always used.
+	CompactDescription string          `json:"compact_description,omitempty"`
+	InputSchema        json.RawMessage `json:"input_schema"`
 }
 
 // CacheControl specifies caching behaviour (Anthropic only).
@@ -172,6 +177,26 @@ type ToolChoice struct {
 	Name string         `json:"name,omitempty"` // required when Mode == ToolChoiceSpecific
 }
 
+// ToolDescriptionMode selects which tool description providers send.
+type ToolDescriptionMode string
+
+// ToolDescriptionMode values recognised by ChatRequest.ToolDescriptions.
+const (
+	ToolDescriptionDefault ToolDescriptionMode = ""        // provider default: Auto
+	ToolDescriptionFull    ToolDescriptionMode = "full"    // always full Description
+	ToolDescriptionCompact ToolDescriptionMode = "compact" // use CompactDescription when present
+	ToolDescriptionAuto    ToolDescriptionMode = "auto"    // compact when talking to a local base URL
+)
+
+// EffectiveToolDescription returns the compact description when useCompact
+// is true and a CompactDescription is set, otherwise the full Description.
+func EffectiveToolDescription(t Tool, useCompact bool) string {
+	if useCompact && t.CompactDescription != "" {
+		return t.CompactDescription
+	}
+	return t.Description
+}
+
 // ChatRequest contains the parameters for a chat completion request.
 type ChatRequest struct {
 	Messages       []Message
@@ -185,6 +210,11 @@ type ChatRequest struct {
 	// StopSequences are strings that, when encountered in the model's
 	// output, terminate generation. Most providers cap the count at 4.
 	StopSequences []string
+	// ToolDescriptions selects which tool description text providers send
+	// on the wire. The zero value (ToolDescriptionDefault) and
+	// ToolDescriptionAuto both auto-select compact descriptions when the
+	// provider's base URL is local; see ToolDescriptionMode.
+	ToolDescriptions ToolDescriptionMode `json:"tool_descriptions,omitempty"`
 }
 
 // FindExtension returns the first extension matching providerName,
