@@ -508,6 +508,8 @@ func TestIsLocalBaseURL(t *testing.T) {
 		want bool
 	}{
 		{"localhost", "http://localhost:11434", true},
+		{"uppercase localhost", "http://LOCALHOST:11434", true},
+		{"mixed-case dot-local", "http://Host.Local", true},
 		{"loopback v4", "http://127.0.0.1:8080", true},
 		{"loopback v6", "http://[::1]:1234", true},
 		{"dot-local name", "http://host.local", true},

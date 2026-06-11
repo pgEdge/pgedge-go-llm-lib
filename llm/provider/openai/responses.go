@@ -194,15 +194,7 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 	}
 
 	if len(req.Tools) > 0 {
-		useCompact := false
-		switch req.ToolDescriptions {
-		case llm.ToolDescriptionCompact:
-			useCompact = true
-		case llm.ToolDescriptionFull:
-			useCompact = false
-		default: // "" (Default) or "auto"
-			useCompact = httpclient.IsLocalBaseURL(c.baseURL)
-		}
+		useCompact := req.UseCompactDescriptions(c.baseURL)
 		out.Tools = make([]responsesTool, len(req.Tools))
 		for i, t := range req.Tools {
 			out.Tools[i] = responsesTool{

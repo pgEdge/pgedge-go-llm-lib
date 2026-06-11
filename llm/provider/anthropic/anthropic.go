@@ -305,15 +305,7 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicCha
 
 	// Tools.
 	if len(req.Tools) > 0 {
-		useCompact := false
-		switch req.ToolDescriptions {
-		case llm.ToolDescriptionCompact:
-			useCompact = true
-		case llm.ToolDescriptionFull:
-			useCompact = false
-		default: // "" (Default) or "auto"
-			useCompact = httpclient.IsLocalBaseURL(c.baseURL)
-		}
+		useCompact := req.UseCompactDescriptions(c.baseURL)
 		aReq.Tools = make([]anthropicTool, len(req.Tools))
 		for i, t := range req.Tools {
 			aReq.Tools[i] = anthropicTool{

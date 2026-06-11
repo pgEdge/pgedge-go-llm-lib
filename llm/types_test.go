@@ -632,3 +632,31 @@ func TestEffectiveToolDescription(t *testing.T) {
 		t.Errorf("useCompact=true, no compact: got %q, want %q", got, "only full")
 	}
 }
+
+func TestUseCompactDescriptions(t *testing.T) {
+	const localURL = "http://localhost:11434"
+	const remoteURL = "https://api.openai.com/v1"
+
+	tests := []struct {
+		name    string
+		mode    ToolDescriptionMode
+		baseURL string
+		want    bool
+	}{
+		{"compact forces true", ToolDescriptionCompact, remoteURL, true},
+		{"full forces false", ToolDescriptionFull, localURL, false},
+		{"default local", ToolDescriptionDefault, localURL, true},
+		{"default remote", ToolDescriptionDefault, remoteURL, false},
+		{"auto local", ToolDescriptionAuto, localURL, true},
+		{"auto remote", ToolDescriptionAuto, remoteURL, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ChatRequest{ToolDescriptions: tt.mode}
+			if got := req.UseCompactDescriptions(tt.baseURL); got != tt.want {
+				t.Errorf("UseCompactDescriptions(%q) with mode %q = %v, want %v",
+					tt.baseURL, tt.mode, got, tt.want)
+			}
+		})
+	}
+}

@@ -222,14 +222,15 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 // llm.ChatRequest. Shared by handleChat and handleChatStream.
 func buildLLMRequest(req ChatRequest) llm.ChatRequest {
 	return llm.ChatRequest{
-		Messages:       req.Messages,
-		Tools:          req.Tools,
-		SystemPrompt:   req.SystemPrompt,
-		MaxTokens:      req.MaxTokens,
-		Temperature:    req.Temperature,
-		ResponseFormat: req.ResponseFormat,
-		ToolChoice:     req.ToolChoice,
-		StopSequences:  req.StopSequences,
+		Messages:         req.Messages,
+		Tools:            req.Tools,
+		SystemPrompt:     req.SystemPrompt,
+		MaxTokens:        req.MaxTokens,
+		Temperature:      req.Temperature,
+		ResponseFormat:   req.ResponseFormat,
+		ToolChoice:       req.ToolChoice,
+		StopSequences:    req.StopSequences,
+		ToolDescriptions: req.ToolDescriptions,
 	}
 }
 

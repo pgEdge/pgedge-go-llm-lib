@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
 )
 
 // Message represents a chat message sent to or received from an LLM.
@@ -214,7 +216,21 @@ type ChatRequest struct {
 	// on the wire. The zero value (ToolDescriptionDefault) and
 	// ToolDescriptionAuto both auto-select compact descriptions when the
 	// provider's base URL is local; see ToolDescriptionMode.
-	ToolDescriptions ToolDescriptionMode `json:"tool_descriptions,omitempty"`
+	ToolDescriptions ToolDescriptionMode
+}
+
+// UseCompactDescriptions reports whether tool descriptions should be sent in
+// their compact form for a request bound for baseURL. Compact and Full force
+// the choice; Default and Auto select compact when baseURL is local.
+func (r ChatRequest) UseCompactDescriptions(baseURL string) bool {
+	switch r.ToolDescriptions {
+	case ToolDescriptionCompact:
+		return true
+	case ToolDescriptionFull:
+		return false
+	default: // ToolDescriptionDefault ("") or ToolDescriptionAuto
+		return httpclient.IsLocalBaseURL(baseURL)
+	}
 }
 
 // FindExtension returns the first extension matching providerName,

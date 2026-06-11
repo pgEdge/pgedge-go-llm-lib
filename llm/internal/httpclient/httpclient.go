@@ -252,11 +252,13 @@ func IsLocalBaseURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	host := u.Hostname()
+	host := strings.ToLower(u.Hostname())
 	switch {
-	case host == "localhost", host == "::1", strings.HasSuffix(host, ".local"):
+	case host == "localhost", strings.HasSuffix(host, ".local"):
 		return true
 	}
+	// net.ParseIP covers loopback addresses, including IPv4 127.0.0.0/8
+	// and the IPv6 ::1 form.
 	if ip := net.ParseIP(host); ip != nil {
 		return ip.IsLoopback()
 	}

@@ -274,6 +274,48 @@ func TestHandleChatRoundtrips(t *testing.T) {
 	}
 }
 
+func TestHandleChatPropagatesToolDescriptions(t *testing.T) {
+	f := &fakeProvider{
+		chatResp: &llm.ChatResponse{
+			Content:    []llm.ContentBlock{{Type: "text", Text: "ok"}},
+			StopReason: "stop",
+		},
+	}
+	setFake(f)
+
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers: map[string]llm.Options{
+			"fake": {Model: "alpha"},
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages:         []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ToolDescriptions: llm.ToolDescriptionCompact,
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	f.mu.RLock()
+	got := f.chatReq
+	f.mu.RUnlock()
+	if got == nil {
+		t.Fatal("provider did not receive a Chat request")
+	}
+	if got.ToolDescriptions != llm.ToolDescriptionCompact {
+		t.Errorf("ToolDescriptions = %q, want %q", got.ToolDescriptions, llm.ToolDescriptionCompact)
+	}
+}
+
 func TestHandleChatHonoursPerRequestProviderAndModel(t *testing.T) {
 	setFake(&fakeProvider{
 		chatResp: &llm.ChatResponse{

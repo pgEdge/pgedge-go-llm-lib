@@ -195,15 +195,7 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 }
 
 func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) (ollamaChatRequest, error) {
-	useCompact := false
-	switch req.ToolDescriptions {
-	case llm.ToolDescriptionCompact:
-		useCompact = true
-	case llm.ToolDescriptionFull:
-		useCompact = false
-	default: // "" (Default) or "auto"
-		useCompact = httpclient.IsLocalBaseURL(c.baseURL)
-	}
+	useCompact := req.UseCompactDescriptions(c.baseURL)
 	msgs, err := c.convertMessages(req, useCompact)
 	if err != nil {
 		return ollamaChatRequest{}, err

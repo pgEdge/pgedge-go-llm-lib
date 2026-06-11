@@ -40,6 +40,11 @@ type ChatRequest struct {
 	ResponseFormat *llm.ResponseFormat `json:"response_format,omitempty"`
 	ToolChoice     *llm.ToolChoice     `json:"tool_choice,omitempty"`
 	StopSequences  []string            `json:"stop_sequences,omitempty"`
+
+	// ToolDescriptions selects which tool description text the provider
+	// sends on the wire; see llm.ToolDescriptionMode. Empty (the default)
+	// auto-selects compact descriptions for local provider base URLs.
+	ToolDescriptions llm.ToolDescriptionMode `json:"tool_descriptions,omitempty"`
 }
 
 // ChatResponse is the wire shape for POST /v1/chat.
