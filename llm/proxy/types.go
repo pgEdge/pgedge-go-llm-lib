@@ -63,7 +63,7 @@ type ProvidersResponse struct {
 // ProviderInfo describes a configured provider.
 type ProviderInfo struct {
 	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"`
+	DisplayName string `json:"display_name"`
 	Model       string `json:"model,omitempty"`
 	Default     bool   `json:"default,omitempty"`
 }

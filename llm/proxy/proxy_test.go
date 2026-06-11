@@ -2287,8 +2287,9 @@ func TestHandleProvidersIncludesDisplayName(t *testing.T) {
 	if byName["anthropic"].DisplayName != "Anthropic" {
 		t.Fatalf("anthropic display = %q, want Anthropic", byName["anthropic"].DisplayName)
 	}
-	if byName["weirdcustom"].DisplayName == "" {
-		t.Fatalf("unknown provider must still get a non-empty display name")
+	if byName["weirdcustom"].DisplayName != "weirdcustom" {
+		t.Fatalf("unknown provider display name = %q, want raw name %q",
+			byName["weirdcustom"].DisplayName, "weirdcustom")
 	}
 }
 

@@ -195,6 +195,22 @@ func TestSSEWriterReturnsNonNilResponseOnError(t *testing.T) {
 	}
 }
 
+func TestDisplayNameFor(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"anthropic", "Anthropic"},
+		{"openai", "OpenAI"},
+		{"weirdcustom", "weirdcustom"},
+	}
+	for _, tc := range cases {
+		if got := displayNameFor(tc.input); got != tc.want {
+			t.Errorf("displayNameFor(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestSSEWriterDoesNotDoubleEmitDone(t *testing.T) {
 	chunks := make(chan llm.StreamChunk, 2)
 	errCh := make(chan error, 1)

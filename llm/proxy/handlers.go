@@ -33,7 +33,7 @@ var providerDisplayNames = map[string]string{
 }
 
 // displayNameFor returns a human-readable label for a provider, falling back
-// to the raw registration name for unknown/custom providers.
+// to the raw registration name for unrecognised providers.
 func displayNameFor(name string) string {
 	if d, ok := providerDisplayNames[name]; ok {
 		return d
