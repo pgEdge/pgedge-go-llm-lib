@@ -216,11 +216,17 @@ func encodeJSON(w io.Writer, v any) error {
 // withDefaults returns a copy of c with all defaultable fields resolved.
 // It is called by New after the defensive Providers copy so that every
 // Proxy stores a fully-normalised Config.
+//
+// PathPrefix normalisation: strip all leading and trailing slashes; if
+// the result is empty (covers "", "/", "///", …) fall back to "v1".
+// The final stored value always starts with exactly one slash and has
+// no trailing slash, e.g. "/v1" or "/api/llm".
 func (c Config) withDefaults() Config {
-	if c.PathPrefix == "" {
-		c.PathPrefix = "/v1"
+	trimmed := strings.Trim(c.PathPrefix, "/")
+	if trimmed == "" {
+		trimmed = "v1"
 	}
-	c.PathPrefix = "/" + strings.Trim(c.PathPrefix, "/")
+	c.PathPrefix = "/" + trimmed
 	return c
 }
 
@@ -246,18 +252,21 @@ func New(cfg Config) *Proxy {
 
 // Handler returns the http.Handler for this proxy.
 //
-// Mount it under whatever path prefix you like — typically "/api"
-// using http.StripPrefix.
+// Routes are registered under p.cfg.PathPrefix (normalised by
+// withDefaults; default "/v1"). For example, with the default prefix
+// the health endpoint is at GET /v1/health; with PathPrefix "/api/llm"
+// it is at GET /api/llm/health.
 func (p *Proxy) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/health", p.handleHealth)
-	mux.HandleFunc("GET /v1/providers", p.handleProviders)
-	mux.HandleFunc("GET /v1/models", p.handleModels)
-	mux.HandleFunc("POST /v1/chat", p.handleChat)
-	mux.HandleFunc("POST /v1/chat/stream", p.handleChatStream)
-	mux.HandleFunc("POST /v1/embed", p.handleEmbed)
-	mux.HandleFunc("POST /v1/embed/multimodal", p.handleEmbedMultimodal)
-	mux.HandleFunc("POST /v1/rerank", p.handleRerank)
+	pfx := p.cfg.PathPrefix
+	mux.HandleFunc("GET "+pfx+"/health", p.handleHealth)
+	mux.HandleFunc("GET "+pfx+"/providers", p.handleProviders)
+	mux.HandleFunc("GET "+pfx+"/models", p.handleModels)
+	mux.HandleFunc("POST "+pfx+"/chat", p.handleChat)
+	mux.HandleFunc("POST "+pfx+"/chat/stream", p.handleChatStream)
+	mux.HandleFunc("POST "+pfx+"/embed", p.handleEmbed)
+	mux.HandleFunc("POST "+pfx+"/embed/multimodal", p.handleEmbedMultimodal)
+	mux.HandleFunc("POST "+pfx+"/rerank", p.handleRerank)
 	return mux
 }
 

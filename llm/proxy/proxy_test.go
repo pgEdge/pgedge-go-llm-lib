@@ -1859,3 +1859,59 @@ func TestNewAppliesConfigDefaults(t *testing.T) {
 		t.Fatalf("/v1/health status = %d, want 200", resp.StatusCode)
 	}
 }
+
+// TestHandlerHonoursPathPrefix verifies that when PathPrefix is set to
+// a non-default value, Handler() registers routes under that prefix and
+// the old default prefix (/v1) returns 404.
+func TestHandlerHonoursPathPrefix(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		PathPrefix:      "/api/llm",
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	r1, err := http.Get(srv.URL + "/api/llm/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusOK {
+		t.Fatalf("/api/llm/health = %d, want 200", r1.StatusCode)
+	}
+	r2, err := http.Get(srv.URL + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusNotFound {
+		t.Fatalf("/v1/health = %d, want 404 when prefix overridden", r2.StatusCode)
+	}
+}
+
+// TestHandlerWithSlashPrefixFallsBackToDefault verifies that a
+// PathPrefix of "/" (or any all-slashes string) normalises to the
+// default "/v1" and that /v1/health is reachable.
+func TestHandlerWithSlashPrefixFallsBackToDefault(t *testing.T) {
+	setFake(&fakeProvider{models: []string{"alpha"}})
+	p := proxy.New(proxy.Config{
+		PathPrefix:      "/",
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/health with PathPrefix='/' status = %d, want 200", resp.StatusCode)
+	}
+}
