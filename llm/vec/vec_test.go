@@ -113,11 +113,24 @@ func TestFloat32ToFloat16(t *testing.T) {
 	if negSubnormal&0x7C00 != 0 {
 		t.Fatalf("negative subnormal -1e-5 = 0x%04X, expected zero exponent", negSubnormal)
 	}
-	// 1.0015 is a normal float32 where the round-bit (bit 12 of the
-	// 23-bit mantissa) is set, exercising the round-up path.
-	roundUp := Float32ToFloat16([]float32{1.0015})[0]
-	// 1.0015 is close to 1.0, so the float16 value must be >= 0x3C00 (1.0).
-	if roundUp < 0x3C00 {
-		t.Fatalf("round-up 1.0015 = 0x%04X, expected >= 0x3C00", roundUp)
+	// 1.0015 is a normal float32 (bits 0x3F803127) where the round-bit (bit 12
+	// of the 23-bit mantissa) is set and the sticky bits (0x127) are non-zero,
+	// so RNE rounds up.  The verified exact result is 0x3C02.
+	if got := Float32ToFloat16([]float32{1.0015})[0]; got != 0x3C02 {
+		t.Fatalf("round-up 1.0015 = 0x%04X, want 0x3C02", got)
+	}
+}
+
+func TestFloat32ToFloat16RoundToEven(t *testing.T) {
+	// 0x3F801000 is exactly halfway between f16 0x3C00 and 0x3C01;
+	// round-to-nearest-even must choose the even value 0x3C00.
+	tie := math.Float32frombits(0x3F801000)
+	if got := Float32ToFloat16([]float32{tie})[0]; got != 0x3C00 {
+		t.Fatalf("RNE tie = 0x%04X, want 0x3C00", got)
+	}
+	// A value just above the tie must round up to 0x3C01.
+	above := math.Float32frombits(0x3F801001)
+	if got := Float32ToFloat16([]float32{above})[0]; got != 0x3C01 {
+		t.Fatalf("above tie = 0x%04X, want 0x3C01", got)
 	}
 }

@@ -12,6 +12,11 @@
 // type conversion, L2 normalisation, dimension resizing, and IEEE-754
 // half-precision (float16) encoding for pgvector halfvec storage. All
 // functions are dependency-free and side-effect free.
+//
+// Float32ToFloat16 returns raw uint16 bit patterns in native byte order.
+// pgvector's halfvec wire format stores each element as a little-endian
+// uint16, so callers writing to the wire must apply binary.LittleEndian
+// encoding to these values.
 package vec
 
 import "math"
@@ -30,7 +35,8 @@ func Float64ToFloat32(v []float64) []float32 {
 }
 
 // Normalize returns the L2-normalised copy of v. A zero-norm vector is
-// returned unchanged (all zeros), never NaN. Returns nil for nil input.
+// returned as an all-zero copy of the same length, never NaN. Returns nil
+// for nil input.
 func Normalize(v []float32) []float32 {
 	if v == nil {
 		return nil
@@ -51,7 +57,8 @@ func Normalize(v []float32) []float32 {
 }
 
 // Resize returns a copy of v with exactly n elements: truncated if v is
-// longer, zero-padded if shorter.
+// longer, zero-padded if shorter. A nil input is treated as empty, yielding
+// an n-element zero vector.
 func Resize(v []float32, n int) []float32 {
 	out := make([]float32, n)
 	copy(out, v)
@@ -60,7 +67,9 @@ func Resize(v []float32, n int) []float32 {
 
 // Float32ToFloat16 encodes each float32 as the 16-bit IEEE-754 binary16 bit
 // pattern used by pgvector halfvec. Handles zero, normals, subnormals,
-// infinities, NaN, and round-to-nearest-even for the mantissa.
+// infinities, NaN, and round-to-nearest-even for the mantissa. The returned
+// uint16 values are raw bit patterns in native byte order; see the package
+// doc for wire-format encoding notes.
 func Float32ToFloat16(v []float32) []uint16 {
 	if v == nil {
 		return nil
@@ -85,9 +94,11 @@ func float32ToFloat16Bits(f float32) uint16 {
 		if mant == 0 {
 			return sign | 0x7C00 // Inf
 		}
+		// NaN: force a non-zero mantissa to preserve NaN-ness; the original
+		// float32 payload is not preserved beyond the NaN signal.
 		// Safe: mant>>13 is at most 10 bits, fits in uint16.
-		return sign | 0x7C00 | uint16(mant>>13) | 0x0001 //nolint:gosec // NaN (keep non-zero mantissa)
-	case exp >= 0x1F: // overflow -> Inf
+		return sign | 0x7C00 | uint16(mant>>13) | 0x0001 //nolint:gosec
+	case exp >= 31: // 31 is the float16 Inf/NaN exponent; anything >= 31 overflows to Inf
 		return sign | 0x7C00
 	case exp <= 0: // subnormal or zero
 		if exp < -10 {
@@ -98,14 +109,20 @@ func float32ToFloat16Bits(f float32) uint16 {
 		shift := uint32(14 - exp) //nolint:gosec
 		// Safe: mant is 24 bits; shift is [14,24], so result fits in uint16.
 		half := uint16(mant >> shift) //nolint:gosec
-		if mant&(1<<(shift-1)) != 0 {
+		// Round-to-nearest-even: round bit is at position (shift-1).
+		roundBit := mant&(1<<(shift-1)) != 0
+		sticky := mant&((1<<(shift-1))-1) != 0
+		if roundBit && (sticky || half&1 != 0) {
 			half++
 		}
 		return sign | half
 	default: // normal
 		// Safe: exp is [1,30] here; exp<<10 is at most 30720, fits in uint16.
 		half := sign | uint16(exp<<10) | uint16(mant>>13) //nolint:gosec
-		if mant&0x1000 != 0 {
+		// Round-to-nearest-even: round bit is bit 12, sticky is bits 11:0.
+		roundBit := mant&0x1000 != 0
+		sticky := mant&0x0FFF != 0
+		if roundBit && (sticky || half&1 != 0) {
 			half++
 		}
 		return half
