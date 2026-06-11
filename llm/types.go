@@ -12,6 +12,8 @@ package llm
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -306,6 +308,7 @@ type RetryConfig struct {
 // arguments (Embed, EmbedBatch) rather than a request struct.
 type Options struct {
 	APIKey        string
+	APIKeyFile    string // optional: path to a file containing the API key; used only when APIKey is empty
 	Model         string
 	BaseURL       string
 	CustomHeaders map[string]string
@@ -383,6 +386,11 @@ type Options struct {
 // so explicit zero values (Temperature=0 for deterministic sampling,
 // MaxTokens=0 for "no client cap") are preserved.
 func (o Options) WithDefaults() Options {
+	if o.APIKey == "" && o.APIKeyFile != "" {
+		if b, err := os.ReadFile(o.APIKeyFile); err == nil { //nolint:gosec // path is operator-supplied config
+			o.APIKey = strings.TrimSpace(string(b))
+		}
+	}
 	if o.Temperature == nil {
 		def := 0.7
 		o.Temperature = &def

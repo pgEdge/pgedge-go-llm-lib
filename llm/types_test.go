@@ -12,6 +12,8 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -553,6 +555,29 @@ func TestToolChoiceJSONTags(t *testing.T) {
 	}
 	if rt.Name != "" {
 		t.Fatalf("name = %q, want empty", rt.Name)
+	}
+}
+
+func TestWithDefaultsAPIKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key")
+	if err := os.WriteFile(path, []byte("  secret-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	o := Options{APIKeyFile: path}.WithDefaults()
+	if o.APIKey != "secret-key" {
+		t.Fatalf("APIKey = %q, want %q", o.APIKey, "secret-key")
+	}
+
+	o2 := Options{APIKey: "explicit", APIKeyFile: path}.WithDefaults()
+	if o2.APIKey != "explicit" {
+		t.Fatalf("APIKey = %q, want explicit", o2.APIKey)
+	}
+
+	o3 := Options{APIKeyFile: filepath.Join(dir, "nope")}.WithDefaults()
+	if o3.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty for missing file", o3.APIKey)
 	}
 }
 
