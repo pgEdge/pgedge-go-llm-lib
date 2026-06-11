@@ -510,3 +510,27 @@ func TestIntHelper(t *testing.T) {
 		t.Errorf("Int reused pointer across calls")
 	}
 }
+
+func TestToolChoiceJSONTags(t *testing.T) {
+	tc := ToolChoice{Mode: ToolChoiceSpecific, Name: "get_weather"}
+	b, err := json.Marshal(tc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	want := `{"mode":"specific","name":"get_weather"}`
+	if got != want {
+		t.Fatalf("marshal mismatch:\n got %s\nwant %s", got, want)
+	}
+
+	var rt ToolChoice
+	if err := json.Unmarshal([]byte(`{"mode":"auto"}`), &rt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rt.Mode != ToolChoiceAuto {
+		t.Fatalf("mode = %q, want %q", rt.Mode, ToolChoiceAuto)
+	}
+	if rt.Name != "" {
+		t.Fatalf("name = %q, want empty", rt.Name)
+	}
+}

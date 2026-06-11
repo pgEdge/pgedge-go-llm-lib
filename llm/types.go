@@ -166,8 +166,8 @@ const (
 // that don't support tool-choice (e.g., Ollama with prompt-based
 // tool-call workaround) ignore this field.
 type ToolChoice struct {
-	Mode ToolChoiceMode
-	Name string // required when Mode == ToolChoiceSpecific
+	Mode ToolChoiceMode `json:"mode"`
+	Name string         `json:"name,omitempty"` // required when Mode == ToolChoiceSpecific
 }
 
 // ChatRequest contains the parameters for a chat completion request.
