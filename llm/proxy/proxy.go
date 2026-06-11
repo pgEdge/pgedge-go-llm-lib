@@ -57,8 +57,9 @@ type Config struct {
 	RequestIDHeader string
 
 	// PathPrefix is the base path under which routes are registered.
-	// Defaults to "/v1" when empty. A leading slash is added and a trailing
-	// slash trimmed during normalisation.
+	// Defaults to "/v1" when empty. A value of "/" or any string consisting
+	// entirely of slashes is also treated as empty and falls back to "/v1".
+	// A leading slash is added and a trailing slash trimmed during normalisation.
 	PathPrefix string
 }
 
@@ -231,7 +232,8 @@ func (c Config) withDefaults() Config {
 }
 
 // New creates a Proxy from the given Config. Call Handler on the
-// result to get the http.Handler that serves:
+// result to get the http.Handler that serves (paths assume the default
+// Config.PathPrefix of "/v1"; setting PathPrefix changes the base):
 //
 //	GET  /v1/health                — ping all configured providers
 //	GET  /v1/providers             — list configured providers
