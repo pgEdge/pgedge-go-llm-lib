@@ -197,13 +197,16 @@ func voyageCatalog() []llm.ModelInfo {
 	multimodal := []llm.ModelCapability{llm.ModelCapabilityEmbeddings, llm.ModelCapabilityMultimodalEmbeddings}
 	rerank := []llm.ModelCapability{llm.ModelCapabilityReranking}
 	return []llm.ModelInfo{
-		{ID: "voyage-3.5", Capabilities: embed, ContextWindow: 32000},
-		{ID: "voyage-3.5-lite", Capabilities: embed, ContextWindow: 32000},
-		{ID: "voyage-3-large", Capabilities: embed, ContextWindow: 32000},
-		{ID: "voyage-code-3", Capabilities: embed, ContextWindow: 32000},
-		{ID: "voyage-finance-2", Capabilities: embed, ContextWindow: 32000},
-		{ID: "voyage-law-2", Capabilities: embed, ContextWindow: 16000},
-		{ID: "voyage-multimodal-3", Capabilities: multimodal, ContextWindow: 32000},
+		{ID: "voyage-3.5", Capabilities: embed, ContextWindow: 32000, Dimensions: 1024},
+		{ID: "voyage-3.5-lite", Capabilities: embed, ContextWindow: 32000, Dimensions: 1024},
+		{ID: "voyage-3-large", Capabilities: embed, ContextWindow: 32000, Dimensions: 1024},
+		{ID: "voyage-3", Capabilities: embed, ContextWindow: 32000, Dimensions: 1024},
+		{ID: "voyage-3-lite", Capabilities: embed, ContextWindow: 32000, Dimensions: 512},
+		{ID: "voyage-code-3", Capabilities: embed, ContextWindow: 32000, Dimensions: 1024},
+		{ID: "voyage-finance-2", Capabilities: embed, ContextWindow: 32000, Dimensions: 1024},
+		{ID: "voyage-law-2", Capabilities: embed, ContextWindow: 16000, Dimensions: 1024},
+		{ID: "voyage-2", Capabilities: embed, ContextWindow: 4000, Dimensions: 1024},
+		{ID: "voyage-multimodal-3", Capabilities: multimodal, ContextWindow: 32000, Dimensions: 1024},
 		{ID: "rerank-2.5", Capabilities: rerank, ContextWindow: 8000},
 		{ID: "rerank-2.5-lite", Capabilities: rerank, ContextWindow: 8000},
 	}

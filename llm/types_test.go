@@ -12,6 +12,7 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -552,5 +553,16 @@ func TestToolChoiceJSONTags(t *testing.T) {
 	}
 	if rt.Name != "" {
 		t.Fatalf("name = %q, want empty", rt.Name)
+	}
+}
+
+func TestModelInfoDimensionsJSON(t *testing.T) {
+	b, _ := json.Marshal(ModelInfo{ID: "m", Dimensions: 1536})
+	if !strings.Contains(string(b), `"dimensions":1536`) {
+		t.Fatalf("missing dimensions tag: %s", b)
+	}
+	b2, _ := json.Marshal(ModelInfo{ID: "m"})
+	if strings.Contains(string(b2), "dimensions") {
+		t.Fatalf("zero dimensions should be omitted: %s", b2)
 	}
 }

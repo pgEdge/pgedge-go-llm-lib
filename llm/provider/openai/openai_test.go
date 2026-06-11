@@ -1818,3 +1818,47 @@ func TestListModelsCapabilityFilterEmbeddings(t *testing.T) {
 		}
 	}
 }
+
+func TestListModelsWithMetadataEmbeddingDimensions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"text-embedding-3-small"},
+			{"id":"text-embedding-3-large"},
+			{"id":"text-embedding-ada-002"},
+			{"id":"gpt-4o"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	infos, err := c.ListModelsWithMetadata(context.Background(),
+		llm.WithCapabilities(llm.ModelCapabilityEmbeddings))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID := make(map[string]llm.ModelInfo, len(infos))
+	for _, info := range infos {
+		byID[info.ID] = info
+	}
+
+	cases := []struct {
+		id   string
+		want int
+	}{
+		{"text-embedding-3-small", 1536},
+		{"text-embedding-3-large", 3072},
+		{"text-embedding-ada-002", 1536},
+	}
+	for _, tc := range cases {
+		info, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("model %q not found in results", tc.id)
+			continue
+		}
+		if info.Dimensions != tc.want {
+			t.Errorf("model %q: Dimensions = %d, want %d", tc.id, info.Dimensions, tc.want)
+		}
+	}
+}

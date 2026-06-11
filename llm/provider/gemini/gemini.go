@@ -863,6 +863,10 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 			// Embedding models are only included when the caller explicitly
 			// requests ModelCapabilityEmbeddings; they are excluded from the
 			// default (chat-focused) model list.
+			//
+			// Dimensions is intentionally left 0: Gemini embedding dimension
+			// is model-specific and only known at runtime from the response
+			// vector length, not from static metadata.
 			if wantEmbeddings {
 				name := strings.TrimPrefix(m.Name, "models/")
 				infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})

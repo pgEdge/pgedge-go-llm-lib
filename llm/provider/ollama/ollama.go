@@ -831,6 +831,10 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 	infos := make([]llm.ModelInfo, len(resp.Models))
 	for i, m := range resp.Models {
 		caps := c.capabilitiesForModel(ctx, m.Name)
+		// Dimensions is intentionally left 0: Ollama serves arbitrary
+		// user-pulled models and the embedding dimension is only known
+		// at runtime from the response vector length, not from static
+		// metadata.
 		infos[i] = llm.ModelInfo{
 			ID:           m.Name,
 			Capabilities: caps,

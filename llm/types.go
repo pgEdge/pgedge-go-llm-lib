@@ -588,6 +588,7 @@ type ModelInfo struct {
 	ID            string            `json:"id"`
 	ContextWindow int               `json:"context_window,omitempty"`
 	MaxOutput     int               `json:"max_output,omitempty"`
+	Dimensions    int               `json:"dimensions,omitempty"` // embedding vector size; 0 if unknown/not an embedding model
 	Capabilities  []ModelCapability `json:"capabilities,omitempty"`
 	Deprecated    bool              `json:"deprecated,omitempty"`
 }

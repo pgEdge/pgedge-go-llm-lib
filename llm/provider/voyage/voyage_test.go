@@ -602,3 +602,34 @@ func TestNewWithOnRetryHook(t *testing.T) {
 		t.Fatal("expected non-nil client")
 	}
 }
+
+func TestCatalogueEmbeddingDimensions(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	infos, err := c.ListModelsWithMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]llm.ModelInfo, len(infos))
+	for _, info := range infos {
+		byID[info.ID] = info
+	}
+
+	cases := []struct {
+		id   string
+		want int
+	}{
+		{"voyage-3-lite", 512},
+		{"voyage-3", 1024},
+		{"voyage-2", 1024},
+	}
+	for _, tc := range cases {
+		info, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("model %q not found in catalogue", tc.id)
+			continue
+		}
+		if info.Dimensions != tc.want {
+			t.Errorf("model %q: Dimensions = %d, want %d", tc.id, info.Dimensions, tc.want)
+		}
+	}
+}
