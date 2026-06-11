@@ -22,10 +22,20 @@ project adheres to
 - `?capability=` query parameter on `GET /v1/models` (repeatable; AND semantics)
 - OpenAI provider auto-routes `o1`, `o3`, and `gpt-5` model families to `/v1/responses` (transparently translating the request/response wire shape); `openai.Extension.ResponsesAPI` overrides the auto-detection
 - `llm.Bool` helper for setting `*bool` option fields
+- `proxy.Config.TransformRequest`: a hook invoked after a chat request is parsed and before it is dispatched, permitted to mutate `SystemPrompt`, `Messages`, and `Tools`. Returning an error rejects the request (default 400, overridable via an `HTTPStatus() int` method). It is the sanctioned request-rewrite point; `OnRequest` observes the post-transform request
+- `proxy.Config.PathPrefix`: configurable base path for the gateway routes (defaults to `/v1`)
+- `proxy.Config.MaxBodyBytes`: optional request-body size limit for `/chat`, `/chat/stream`, `/embed`, and `/rerank` (0 means unlimited)
+- `ProviderInfo.DisplayName`: a human-readable provider label surfaced by `GET /v1/providers`, with sensible defaults and a raw-name fallback
+- `ModelInfo.Dimensions`: embedding vector dimension, populated where statically known (OpenAI and Voyage embedding models)
+- `TokenUsage.CacheSavingsPercent`: derived percentage of input tokens served from the prompt cache
+- `Tool.CompactDescription` and `ChatRequest.ToolDescriptions` (`ToolDescriptionMode`): an optional shorter tool description plus a selection policy (explicit `full`/`compact`, or an `auto` policy that uses the compact form for local/loopback endpoints). Exposed on the proxy via the `tool_descriptions` request field
+- `Options.APIKeyFile`: resolve the API key from a file path at client construction (used only when `APIKey` is empty)
+- `llm/vec` package: pure embedding-vector helpers (`Float64ToFloat32`, `Normalize`, `Resize`, and `Float32ToFloat16` for pgvector `halfvec` storage)
 
 ### Changed
 - **Breaking (for external implementers of `llm.Client`):** `ListModels` and `ListModelsWithMetadata` are now variadic, accepting `...ListModelsOption`. Source-compatible for callers; interface change for external implementers.
 - **Breaking (for external implementers of `llm.Client`):** `Rerank` and `EmbedMultimodal` added to the interface. External implementers must add these methods (returning `ErrNotSupported` if not supported).
+- **Breaking (proxy wire format):** `ToolChoice` now serialises with snake_case JSON tags (`{"mode":...,"name":...}`) instead of the previous Go default (`{"Mode":...,"Name":...}`). Clients sending `tool_choice` through the proxy must use the snake_case keys.
 
 ---
 
