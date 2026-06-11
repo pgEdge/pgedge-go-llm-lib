@@ -22,6 +22,25 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
+// providerDisplayNames maps well-known provider registration names to
+// human-readable labels for use in UI pickers and similar surfaces.
+var providerDisplayNames = map[string]string{
+	"anthropic": "Anthropic",
+	"openai":    "OpenAI",
+	"gemini":    "Google Gemini",
+	"ollama":    "Ollama",
+	"voyage":    "Voyage AI",
+}
+
+// displayNameFor returns a human-readable label for a provider, falling back
+// to the raw registration name for unknown/custom providers.
+func displayNameFor(name string) string {
+	if d, ok := providerDisplayNames[name]; ok {
+		return d
+	}
+	return name
+}
+
 func (p *Proxy) handleProviders(w http.ResponseWriter, r *http.Request) {
 	r, reqID := p.ensureRequestID(r)
 	if reqID != "" {
@@ -34,9 +53,10 @@ func (p *Proxy) handleProviders(w http.ResponseWriter, r *http.Request) {
 	infos := make([]ProviderInfo, 0, len(p.cfg.Providers))
 	for name, opts := range p.cfg.Providers {
 		infos = append(infos, ProviderInfo{
-			Name:    name,
-			Model:   opts.Model,
-			Default: name == p.cfg.DefaultProvider,
+			Name:        name,
+			DisplayName: displayNameFor(name),
+			Model:       opts.Model,
+			Default:     name == p.cfg.DefaultProvider,
 		})
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })

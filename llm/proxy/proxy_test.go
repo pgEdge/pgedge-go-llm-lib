@@ -2261,6 +2261,37 @@ func TestTransformRequestMutatesStream(t *testing.T) {
 	}
 }
 
+func TestHandleProvidersIncludesDisplayName(t *testing.T) {
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "anthropic",
+		Providers: map[string]llm.Options{
+			"anthropic":   {Model: "claude"},
+			"weirdcustom": {Model: "x"},
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var pr proxy.ProvidersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]proxy.ProviderInfo{}
+	for _, info := range pr.Providers {
+		byName[info.Name] = info
+	}
+	if byName["anthropic"].DisplayName != "Anthropic" {
+		t.Fatalf("anthropic display = %q, want Anthropic", byName["anthropic"].DisplayName)
+	}
+	if byName["weirdcustom"].DisplayName == "" {
+		t.Fatalf("unknown provider must still get a non-empty display name")
+	}
+}
+
 // TestTransformRequestStreamRejectsWithStatus verifies that a rejection
 // before the stream starts yields a non-200 status on the streaming
 // endpoint, because the transform runs before SSE headers are written.

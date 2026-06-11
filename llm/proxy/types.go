@@ -62,9 +62,10 @@ type ProvidersResponse struct {
 
 // ProviderInfo describes a configured provider.
 type ProviderInfo struct {
-	Name    string `json:"name"`
-	Model   string `json:"model,omitempty"`
-	Default bool   `json:"default,omitempty"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Default     bool   `json:"default,omitempty"`
 }
 
 // ModelsResponse is the wire shape for GET /v1/models?provider=X.
