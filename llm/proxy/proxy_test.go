@@ -1837,3 +1837,25 @@ func TestEmbedMultimodalUpstreamError(t *testing.T) {
 		t.Fatalf("expected 502, got %d", rec.Code)
 	}
 }
+
+// TestNewAppliesConfigDefaults locks the default /v1 prefix behaviour
+// before Task 8 makes the prefix configurable. It verifies that a
+// Proxy created with an empty PathPrefix still serves /v1/health at
+// the expected path.
+func TestNewAppliesConfigDefaults(t *testing.T) {
+	setFake(&fakeProvider{models: []string{"alpha"}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/health status = %d, want 200", resp.StatusCode)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
@@ -54,6 +55,11 @@ type Config struct {
 	// "X-Request-ID" when empty. Set to "-" to disable request-ID
 	// propagation entirely.
 	RequestIDHeader string
+
+	// PathPrefix is the base path under which routes are registered.
+	// Defaults to "/v1" when empty. A leading slash is added and a trailing
+	// slash trimmed during normalisation.
+	PathPrefix string
 }
 
 // RequestInfo describes an incoming chat request, supplied to OnRequest.
@@ -207,6 +213,17 @@ func encodeJSON(w io.Writer, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+// withDefaults returns a copy of c with all defaultable fields resolved.
+// It is called by New after the defensive Providers copy so that every
+// Proxy stores a fully-normalised Config.
+func (c Config) withDefaults() Config {
+	if c.PathPrefix == "" {
+		c.PathPrefix = "/v1"
+	}
+	c.PathPrefix = "/" + strings.Trim(c.PathPrefix, "/")
+	return c
+}
+
 // New creates a Proxy from the given Config. Call Handler on the
 // result to get the http.Handler that serves:
 //
@@ -224,7 +241,7 @@ func New(cfg Config) *Proxy {
 		providers[k] = v
 	}
 	cfg.Providers = providers
-	return &Proxy{cfg: cfg}
+	return &Proxy{cfg: cfg.withDefaults()}
 }
 
 // Handler returns the http.Handler for this proxy.
