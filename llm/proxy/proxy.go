@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,8 +48,9 @@ type Config struct {
 	// MAY mutate the request — e.g. attaching context values for
 	// downstream hooks.
 	//
-	// Authorize fires for every endpoint including GET /v1/providers,
-	// /v1/models, and /v1/health.
+	// Authorize fires for every endpoint registered under the
+	// configured PathPrefix: the provider, model, and health listing
+	// endpoints as well as the chat, embed, and rerank endpoints.
 	//
 	// Authorize runs synchronously in the request goroutine; a panic in
 	// the hook aborts the request and is not recovered.
@@ -214,7 +216,8 @@ func randomRequestID() string {
 // httpStatusOf returns the HTTP status an error requests via an
 // HTTPStatus() int method, or fallback if it does not implement one.
 func httpStatusOf(err error, fallback int) int {
-	if hs, ok := err.(interface{ HTTPStatus() int }); ok {
+	var hs interface{ HTTPStatus() int }
+	if errors.As(err, &hs) {
 		return hs.HTTPStatus()
 	}
 	return fallback
@@ -222,15 +225,19 @@ func httpStatusOf(err error, fallback int) int {
 
 // authorize runs the Authorize hook (if configured). Returns true
 // if the request should proceed, false if it was rejected (writeError
-// was called with an appropriate status). reqID is threaded into the
-// ErrorInfo so rejections carry the request ID like every other error.
-func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request, reqID string) bool {
+// was called with an appropriate status). The supplied info carries any
+// context known at the call site (e.g. the request ID) into the
+// ErrorInfo so rejections preserve that context like every other error.
+// authorize runs before request parsing, so the provider and model are
+// not yet known and must not be set on info by callers.
+func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request, info ErrorInfo) bool {
 	if p.cfg.Authorize == nil {
 		return true
 	}
 	if err := p.cfg.Authorize(r); err != nil {
-		status := httpStatusOf(err, http.StatusUnauthorized)
-		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err, RequestID: reqID})
+		info.StatusCode = httpStatusOf(err, http.StatusUnauthorized)
+		info.Err = err
+		p.writeError(w, r, info)
 		return false
 	}
 	return true
@@ -241,14 +248,17 @@ func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request, reqID string) 
 // hook MAY mutate llmReq in place. Returns true if the request should
 // proceed, false if it was rejected (writeError was called with status
 // 400 by default, overridable via an HTTPStatus() int method on the
-// returned error).
-func (p *Proxy) transform(w http.ResponseWriter, r *http.Request, reqID string, llmReq *llm.ChatRequest) bool {
+// returned error). The supplied info carries the resolved provider,
+// model, stream flag, and request ID into the ErrorInfo so transform
+// rejections surface the same telemetry as a successful dispatch.
+func (p *Proxy) transform(w http.ResponseWriter, r *http.Request, info ErrorInfo, llmReq *llm.ChatRequest) bool {
 	if p.cfg.TransformRequest == nil {
 		return true
 	}
 	if err := p.cfg.TransformRequest(r, llmReq); err != nil {
-		status := httpStatusOf(err, http.StatusBadRequest)
-		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err, RequestID: reqID})
+		info.StatusCode = httpStatusOf(err, http.StatusBadRequest)
+		info.Err = err
+		p.writeError(w, r, info)
 		return false
 	}
 	return true

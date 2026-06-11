@@ -56,6 +56,10 @@ func TestResize(t *testing.T) {
 	if got := Resize([]float32{1, 2}, 2); len(got) != 2 {
 		t.Fatalf("same length = %v", got)
 	}
+	nilOut := Resize(nil, 3)
+	if len(nilOut) != 3 || nilOut[0] != 0 || nilOut[1] != 0 || nilOut[2] != 0 {
+		t.Fatalf("nil input = %v, want [0 0 0]", nilOut)
+	}
 }
 
 func TestFloat32ToFloat16(t *testing.T) {

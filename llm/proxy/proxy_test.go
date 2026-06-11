@@ -2327,3 +2327,68 @@ func TestTransformRequestStreamRejectsWithStatus(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
 }
+
+// TestTransformRejectionForwardsResolvedInfo verifies that when
+// TransformRequest rejects a request, the OnError ErrorInfo carries the
+// resolved provider and model (here a per-request model override) and
+// the correct Stream flag for both the non-stream and stream paths.
+func TestTransformRejectionForwardsResolvedInfo(t *testing.T) {
+	cases := []struct {
+		name       string
+		path       string
+		wantStream bool
+	}{
+		{"chat", "/v1/chat", false},
+		{"chat-stream", "/v1/chat/stream", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setFake(&fakeProvider{
+				chatResp: &llm.ChatResponse{StopReason: "stop"},
+				streamFn: func(_ context.Context, _ llm.ChatRequest) (*llm.Stream, error) {
+					return nil, llm.ErrNotSupported
+				},
+			})
+			var got proxy.ErrorInfo
+			p := proxy.New(proxy.Config{
+				DefaultProvider: "fake",
+				Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+				TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+					return transformErr{status: http.StatusForbidden}
+				},
+				OnError: func(_ *http.Request, info proxy.ErrorInfo) {
+					got = info
+				},
+			})
+			srv := httptest.NewServer(p.Handler())
+			defer srv.Close()
+			body, _ := json.Marshal(proxy.ChatRequest{
+				Model:    "beta",
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+			})
+			resp, err := http.Post(srv.URL+tc.path, "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", resp.StatusCode)
+			}
+			if got.Provider != "fake" {
+				t.Errorf("ErrorInfo.Provider = %q, want fake", got.Provider)
+			}
+			if got.Model != "beta" {
+				t.Errorf("ErrorInfo.Model = %q, want beta (resolved override)", got.Model)
+			}
+			if got.Stream != tc.wantStream {
+				t.Errorf("ErrorInfo.Stream = %v, want %v", got.Stream, tc.wantStream)
+			}
+			if got.StatusCode != http.StatusForbidden {
+				t.Errorf("ErrorInfo.StatusCode = %d, want 403", got.StatusCode)
+			}
+			if got.Err == nil {
+				t.Error("ErrorInfo.Err = nil, want non-nil")
+			}
+		})
+	}
+}

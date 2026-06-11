@@ -12,12 +12,41 @@ package proxy
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
+
+// statusErr is a minimal error type implementing HTTPStatus() int, used
+// to prove httpStatusOf traverses wrapped errors via errors.As.
+type statusErr struct{ code int }
+
+func (statusErr) Error() string     { return "teapot" }
+func (e statusErr) HTTPStatus() int { return e.code }
+
+// TestHTTPStatusOfWrapped verifies httpStatusOf reaches an HTTPStatus()
+// implementation buried under %w wrapping rather than only matching a
+// direct type assertion.
+func TestHTTPStatusOfWrapped(t *testing.T) {
+	wrapped := fmt.Errorf("context: %w", statusErr{code: 418})
+	if got := httpStatusOf(wrapped, http.StatusBadRequest); got != 418 {
+		t.Fatalf("httpStatusOf(wrapped) = %d, want 418", got)
+	}
+
+	// A plain error with no HTTPStatus method falls back.
+	if got := httpStatusOf(errors.New("plain"), http.StatusBadRequest); got != http.StatusBadRequest {
+		t.Fatalf("httpStatusOf(plain) = %d, want 400", got)
+	}
+
+	// A direct (unwrapped) implementer still resolves.
+	if got := httpStatusOf(statusErr{code: 403}, http.StatusBadRequest); got != 403 {
+		t.Fatalf("httpStatusOf(direct) = %d, want 403", got)
+	}
+}
 
 // fakeFlushBuffer captures writes and counts Flush calls.
 type fakeFlushBuffer struct {

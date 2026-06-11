@@ -46,7 +46,7 @@ func (p *Proxy) handleProviders(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 
@@ -75,7 +75,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 
@@ -160,7 +160,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -174,7 +174,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	llmReq := buildLLMRequest(req)
-	if !p.transform(w, r, reqID, &llmReq) {
+	if !p.transform(w, r, ErrorInfo{Provider: provider, Model: model, Stream: false, RequestID: reqID}, &llmReq) {
 		return
 	}
 	if p.cfg.OnRequest != nil {
@@ -294,7 +294,7 @@ func (p *Proxy) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 
@@ -339,7 +339,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -353,7 +353,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	llmReq := buildLLMRequest(req)
-	if !p.transform(w, r, reqID, &llmReq) {
+	if !p.transform(w, r, ErrorInfo{Provider: provider, Model: model, Stream: true, RequestID: reqID}, &llmReq) {
 		return
 	}
 	if p.cfg.OnRequest != nil {
@@ -433,7 +433,7 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -490,7 +490,7 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 	if p.cfg.MaxBodyBytes > 0 {
@@ -559,7 +559,7 @@ func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r, reqID) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxEmbedMultimodalBodyBytes)
