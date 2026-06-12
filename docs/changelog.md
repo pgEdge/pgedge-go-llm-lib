@@ -10,6 +10,8 @@ project adheres to
 
 ## Unreleased
 
+## [0.1.0] - 2026-06-12
+
 ### Added
 - `Options.PerAttemptTimeout`: an optional per-attempt wall-clock cap that makes a slow individual attempt retryable, instead of letting it consume the whole `RequestTimeout` budget with no room to retry. Derived from the request context so it never cancels the caller's context, and detached on success so it does not interrupt a streaming response body
 - `anthropic.WithSystemCaching` helper that marks the system prompt as a cacheable prefix on Anthropic requests
@@ -31,18 +33,6 @@ project adheres to
 - `Tool.CompactDescription` and `ChatRequest.ToolDescriptions` (`ToolDescriptionMode`): an optional shorter tool description plus a selection policy (explicit `full`/`compact`, or an `auto` policy that uses the compact form for local/loopback endpoints). Exposed on the proxy via the `tool_descriptions` request field
 - `Options.APIKeyFile`: resolve the API key from a file path at client construction (used only when `APIKey` is empty)
 - `llm/vec` package: pure embedding-vector helpers (`Float64ToFloat32`, `Normalize`, `Resize`, and `Float32ToFloat16` for pgvector `halfvec` storage)
-
-### Changed
-- **Breaking (for external implementers of `llm.Client`):** `ListModels` and `ListModelsWithMetadata` are now variadic, accepting `...ListModelsOption`. Source-compatible for callers; interface change for external implementers.
-- **Breaking (for external implementers of `llm.Client`):** `Rerank` and `EmbedMultimodal` added to the interface. External implementers must add these methods (returning `ErrNotSupported` if not supported).
-- **Breaking (proxy wire format):** `ToolChoice` now serialises with snake_case JSON tags (`{"mode":...,"name":...}`) instead of the previous Go default (`{"Mode":...,"Name":...}`). Clients sending `tool_choice` through the proxy must use the snake_case keys.
-
----
-
-## [Unreleased] - Alpha 1
-
-### Added
-
 - Unified `Client` interface for interacting with multiple
   LLM providers through a single API.
 - Anthropic provider with chat completions, streaming, tool
@@ -147,3 +137,8 @@ project adheres to
 - JSON mode and JSON-schema output for the Ollama provider via
   Ollama's `format` field (Ollama 0.5.0 or later).
 - Comprehensive test suite with unit and integration tests.
+
+### Changed
+- **Breaking (for external implementers of `llm.Client`):** `ListModels` and `ListModelsWithMetadata` are now variadic, accepting `...ListModelsOption`. Source-compatible for callers; interface change for external implementers.
+- **Breaking (for external implementers of `llm.Client`):** `Rerank` and `EmbedMultimodal` added to the interface. External implementers must add these methods (returning `ErrNotSupported` if not supported).
+- **Breaking (proxy wire format):** `ToolChoice` now serialises with snake_case JSON tags (`{"mode":...,"name":...}`) instead of the previous Go default (`{"Mode":...,"Name":...}`). Clients sending `tool_choice` through the proxy must use the snake_case keys.
