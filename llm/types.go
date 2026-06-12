@@ -12,7 +12,11 @@ package llm
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strings"
 	"time"
+
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
 )
 
 // Message represents a chat message sent to or received from an LLM.
@@ -100,9 +104,14 @@ type ToolUse struct {
 
 // Tool defines a tool/function available for the LLM to call.
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// CompactDescription is an optional shorter description used when a
+	// caller (or the auto policy) selects compact tool descriptions —
+	// see ToolDescriptionMode and EffectiveToolDescription. When empty,
+	// the full Description is always used.
+	CompactDescription string          `json:"compact_description,omitempty"`
+	InputSchema        json.RawMessage `json:"input_schema"`
 }
 
 // CacheControl specifies caching behaviour (Anthropic only).
@@ -166,8 +175,28 @@ const (
 // that don't support tool-choice (e.g., Ollama with prompt-based
 // tool-call workaround) ignore this field.
 type ToolChoice struct {
-	Mode ToolChoiceMode
-	Name string // required when Mode == ToolChoiceSpecific
+	Mode ToolChoiceMode `json:"mode"`
+	Name string         `json:"name,omitempty"` // required when Mode == ToolChoiceSpecific
+}
+
+// ToolDescriptionMode selects which tool description providers send.
+type ToolDescriptionMode string
+
+// ToolDescriptionMode values recognised by ChatRequest.ToolDescriptions.
+const (
+	ToolDescriptionDefault ToolDescriptionMode = ""        // provider default: Auto
+	ToolDescriptionFull    ToolDescriptionMode = "full"    // always full Description
+	ToolDescriptionCompact ToolDescriptionMode = "compact" // use CompactDescription when present
+	ToolDescriptionAuto    ToolDescriptionMode = "auto"    // compact when talking to a local base URL
+)
+
+// EffectiveToolDescription returns the compact description when useCompact
+// is true and a CompactDescription is set, otherwise the full Description.
+func EffectiveToolDescription(t Tool, useCompact bool) string {
+	if useCompact && t.CompactDescription != "" {
+		return t.CompactDescription
+	}
+	return t.Description
 }
 
 // ChatRequest contains the parameters for a chat completion request.
@@ -183,6 +212,25 @@ type ChatRequest struct {
 	// StopSequences are strings that, when encountered in the model's
 	// output, terminate generation. Most providers cap the count at 4.
 	StopSequences []string
+	// ToolDescriptions selects which tool description text providers send
+	// on the wire. The zero value (ToolDescriptionDefault) and
+	// ToolDescriptionAuto both auto-select compact descriptions when the
+	// provider's base URL is local; see ToolDescriptionMode.
+	ToolDescriptions ToolDescriptionMode
+}
+
+// UseCompactDescriptions reports whether tool descriptions should be sent in
+// their compact form for a request bound for baseURL. Compact and Full force
+// the choice; Default and Auto select compact when baseURL is local.
+func (r ChatRequest) UseCompactDescriptions(baseURL string) bool {
+	switch r.ToolDescriptions {
+	case ToolDescriptionCompact:
+		return true
+	case ToolDescriptionFull:
+		return false
+	default: // ToolDescriptionDefault ("") or ToolDescriptionAuto
+		return httpclient.IsLocalBaseURL(baseURL)
+	}
 }
 
 // FindExtension returns the first extension matching providerName,
@@ -228,6 +276,20 @@ func (u *TokenUsage) Add(other TokenUsage) {
 	u.TotalTokens += other.TotalTokens
 	u.CacheCreationInputTokens += other.CacheCreationInputTokens
 	u.CacheReadInputTokens += other.CacheReadInputTokens
+}
+
+// CacheSavingsPercent returns the percentage of input tokens that were
+// served from the prompt cache: CacheReadInputTokens relative to the total
+// input tokens (PromptTokens + CacheReadInputTokens +
+// CacheCreationInputTokens). It returns 0 when there is no input or no
+// cache read. Only Anthropic currently populates the cache token fields;
+// for other providers this is always 0.
+func (u TokenUsage) CacheSavingsPercent() float64 {
+	totalInput := u.PromptTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	if totalInput == 0 || u.CacheReadInputTokens == 0 {
+		return 0
+	}
+	return float64(u.CacheReadInputTokens) / float64(totalInput) * 100
 }
 
 // RetryEvent describes a single retry attempt that just failed.
@@ -292,6 +354,7 @@ type RetryConfig struct {
 // arguments (Embed, EmbedBatch) rather than a request struct.
 type Options struct {
 	APIKey        string
+	APIKeyFile    string // optional: path to a file containing the API key; used only when APIKey is empty
 	Model         string
 	BaseURL       string
 	CustomHeaders map[string]string
@@ -369,6 +432,11 @@ type Options struct {
 // so explicit zero values (Temperature=0 for deterministic sampling,
 // MaxTokens=0 for "no client cap") are preserved.
 func (o Options) WithDefaults() Options {
+	if o.APIKey == "" && o.APIKeyFile != "" {
+		if b, err := os.ReadFile(o.APIKeyFile); err == nil { //nolint:gosec // path is operator-supplied config
+			o.APIKey = strings.TrimSpace(string(b))
+		}
+	}
 	if o.Temperature == nil {
 		def := 0.7
 		o.Temperature = &def
@@ -574,6 +642,7 @@ type ModelInfo struct {
 	ID            string            `json:"id"`
 	ContextWindow int               `json:"context_window,omitempty"`
 	MaxOutput     int               `json:"max_output,omitempty"`
+	Dimensions    int               `json:"dimensions,omitempty"` // embedding vector size; 0 if unknown/not an embedding model
 	Capabilities  []ModelCapability `json:"capabilities,omitempty"`
 	Deprecated    bool              `json:"deprecated,omitempty"`
 }

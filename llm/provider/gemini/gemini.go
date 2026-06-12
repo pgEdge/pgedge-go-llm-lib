@@ -345,11 +345,12 @@ func (c *client) buildChatRequest(req llm.ChatRequest) geminiRequest {
 
 	// Tools.
 	if len(req.Tools) > 0 {
+		useCompact := req.UseCompactDescriptions(c.baseURL)
 		decls := make([]geminiFunctionDeclaration, len(req.Tools))
 		for i, t := range req.Tools {
 			decls[i] = geminiFunctionDeclaration{
 				Name:        t.Name,
-				Description: t.Description,
+				Description: llm.EffectiveToolDescription(t, useCompact),
 				Parameters:  t.InputSchema,
 			}
 		}
@@ -863,6 +864,10 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 			// Embedding models are only included when the caller explicitly
 			// requests ModelCapabilityEmbeddings; they are excluded from the
 			// default (chat-focused) model list.
+			//
+			// Dimensions is intentionally left 0: Gemini embedding dimension
+			// is model-specific and only known at runtime from the response
+			// vector length, not from static metadata.
 			if wantEmbeddings {
 				name := strings.TrimPrefix(m.Name, "models/")
 				infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})

@@ -602,3 +602,58 @@ func TestNewWithOnRetryHook(t *testing.T) {
 		t.Fatal("expected non-nil client")
 	}
 }
+
+func TestCatalogueEmbeddingDimensions(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	infos, err := c.ListModelsWithMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]llm.ModelInfo, len(infos))
+	for _, info := range infos {
+		byID[info.ID] = info
+	}
+
+	// Full set of embedding models with known static dimensions.
+	cases := []struct {
+		id   string
+		want int
+	}{
+		// Matryoshka-capable models (default dimension).
+		{"voyage-3.5", 1024},
+		{"voyage-3.5-lite", 1024},
+		{"voyage-3-large", 1024},
+		{"voyage-code-3", 1024},
+		// Fixed-dimension embedding models.
+		{"voyage-3", 1024},
+		{"voyage-3-lite", 512},
+		{"voyage-finance-2", 1024},
+		{"voyage-law-2", 1024},
+		{"voyage-2", 1024},
+		// Multimodal embedding model: Voyage documents 1024 as the default.
+		{"voyage-multimodal-3", 1024},
+	}
+	for _, tc := range cases {
+		info, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("model %q not found in catalogue", tc.id)
+			continue
+		}
+		if info.Dimensions != tc.want {
+			t.Errorf("model %q: Dimensions = %d, want %d", tc.id, info.Dimensions, tc.want)
+		}
+	}
+
+	// Reranker models are not embedding models and must report Dimensions == 0.
+	rerankers := []string{"rerank-2.5", "rerank-2.5-lite"}
+	for _, id := range rerankers {
+		info, ok := byID[id]
+		if !ok {
+			t.Errorf("reranker model %q not found in catalogue", id)
+			continue
+		}
+		if info.Dimensions != 0 {
+			t.Errorf("reranker %q: Dimensions = %d, want 0", id, info.Dimensions)
+		}
+	}
+}

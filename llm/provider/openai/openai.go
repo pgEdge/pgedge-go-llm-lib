@@ -312,13 +312,14 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRe
 
 	// Tools.
 	if len(req.Tools) > 0 {
+		useCompact := req.UseCompactDescriptions(c.baseURL)
 		oaiReq.Tools = make([]openaiTool, len(req.Tools))
 		for i, t := range req.Tools {
 			oaiReq.Tools[i] = openaiTool{
 				Type: "function",
 				Function: openaiToolDef{
 					Name:        t.Name,
-					Description: t.Description,
+					Description: llm.EffectiveToolDescription(t, useCompact),
 					Parameters:  t.InputSchema,
 				},
 			}
@@ -832,6 +833,15 @@ type openaiModelData struct {
 	ID string `json:"id"`
 }
 
+// openaiEmbeddingDimensions maps known OpenAI embedding model IDs to their
+// native (default) vector dimensions. Models not listed here have unknown
+// dimensions and are left at 0 in ModelInfo.Dimensions.
+var openaiEmbeddingDimensions = map[string]int{
+	"text-embedding-3-small": 1536,
+	"text-embedding-3-large": 3072,
+	"text-embedding-ada-002": 1536,
+}
+
 // filterPrefixes lists model ID prefixes for non-chat models.
 var filterPrefixes = []string{
 	"text-embedding",
@@ -916,7 +926,11 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 			// requests ModelCapabilityEmbeddings; they are excluded from the
 			// default (chat-focused) model list.
 			if wantEmbeddings {
-				infos = append(infos, llm.ModelInfo{ID: m.ID, Capabilities: caps})
+				infos = append(infos, llm.ModelInfo{
+					ID:           m.ID,
+					Capabilities: caps,
+					Dimensions:   openaiEmbeddingDimensions[m.ID],
+				})
 			}
 		} else if !shouldFilterModel(m.ID) {
 			infos = append(infos, llm.ModelInfo{ID: m.ID, Capabilities: caps})

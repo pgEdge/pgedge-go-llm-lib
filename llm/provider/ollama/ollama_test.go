@@ -169,6 +169,136 @@ func TestChatWithToolsInjectsSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestChatToolsCompactDescription(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": "ok"},
+			"done":    true,
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:         []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ToolDescriptions: llm.ToolDescriptionCompact,
+		Tools: []llm.Tool{
+			{
+				Name:               "get_weather",
+				Description:        "FULL DESCRIPTION should not appear",
+				CompactDescription: "compact weather desc",
+				InputSchema:        json.RawMessage(`{"type":"object"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotBody, "compact weather desc") {
+		t.Errorf("expected compact description in body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, "FULL DESCRIPTION") {
+		t.Errorf("did not expect full description in body, got %s", gotBody)
+	}
+}
+
+func TestChatToolsFullDescriptionWithStopSequences(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": "ok"},
+			"done":    true,
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:         []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ToolDescriptions: llm.ToolDescriptionFull,
+		StopSequences:    []string{"STOP"},
+		Tools: []llm.Tool{
+			{
+				Name:               "get_weather",
+				Description:        "FULL DESCRIPTION should appear",
+				CompactDescription: "compact should not appear",
+				InputSchema:        json.RawMessage(`{"type":"object"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// ToolDescriptionFull must win even when the base URL is local.
+	if !strings.Contains(gotBody, "FULL DESCRIPTION should appear") {
+		t.Errorf("expected full description in body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, "compact should not appear") {
+		t.Errorf("did not expect compact description in body, got %s", gotBody)
+	}
+	// StopSequences should be forwarded in the options map.
+	if !strings.Contains(gotBody, "STOP") {
+		t.Errorf("expected stop sequence in body, got %s", gotBody)
+	}
+}
+
+func TestChatResponseFormatJSONSchema(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": `{"ok":true}`},
+			"done":    true,
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ResponseFormat: &llm.ResponseFormat{
+			Type:       llm.ResponseFormatJSONSchema,
+			JSONSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}}}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The schema object should be forwarded as the format field.
+	if !strings.Contains(gotBody, `"format"`) || !strings.Contains(gotBody, `"properties"`) {
+		t.Errorf("expected schema format in body, got %s", gotBody)
+	}
+}
+
+func TestChatConvertMessagesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called when message conversion fails")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	// A URL-only image is unsupported by Ollama and must surface an error
+	// before any request is sent.
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.ImageURLBlock("https://example.com/cat.png")}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for URL-only image input, got nil")
+	}
+}
+
 func TestChatToolCallParsing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

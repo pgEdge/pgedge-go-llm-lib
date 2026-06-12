@@ -40,6 +40,11 @@ type ChatRequest struct {
 	ResponseFormat *llm.ResponseFormat `json:"response_format,omitempty"`
 	ToolChoice     *llm.ToolChoice     `json:"tool_choice,omitempty"`
 	StopSequences  []string            `json:"stop_sequences,omitempty"`
+
+	// ToolDescriptions selects which tool description text the provider
+	// sends on the wire; see llm.ToolDescriptionMode. Empty (the default)
+	// auto-selects compact descriptions for local provider base URLs.
+	ToolDescriptions llm.ToolDescriptionMode `json:"tool_descriptions,omitempty"`
 }
 
 // ChatResponse is the wire shape for POST /v1/chat.
@@ -57,9 +62,10 @@ type ProvidersResponse struct {
 
 // ProviderInfo describes a configured provider.
 type ProviderInfo struct {
-	Name    string `json:"name"`
-	Model   string `json:"model,omitempty"`
-	Default bool   `json:"default,omitempty"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Model       string `json:"model,omitempty"`
+	Default     bool   `json:"default,omitempty"`
 }
 
 // ModelsResponse is the wire shape for GET /v1/models?provider=X.

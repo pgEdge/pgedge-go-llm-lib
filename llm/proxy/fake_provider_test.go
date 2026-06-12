@@ -34,6 +34,7 @@ type fakeProvider struct {
 	modelInfos    []llm.ModelInfo // when set, ListModelsWithMetadata returns these (ignoring models)
 	chatResp      *llm.ChatResponse
 	chatErr       error
+	chatReq       *llm.ChatRequest // captures the request passed to Chat
 	streamFn      func(context.Context, llm.ChatRequest) (*llm.Stream, error)
 	listModelsErr error               // when set, ListModels and ListModelsWithMetadata return this error
 	pingErr       error               // when set, Ping returns this error
@@ -70,7 +71,12 @@ func init() {
 	})
 }
 
-func (f *fakeProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (f *fakeProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	f.mu.Lock()
+	captured := req
+	f.chatReq = &captured
+	f.mu.Unlock()
+
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.chatErr != nil {

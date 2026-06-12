@@ -213,6 +213,45 @@ func TestChatWithTools(t *testing.T) {
 	}
 }
 
+func TestChatToolsCompactDescription(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"},
+			},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:         []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ToolDescriptions: llm.ToolDescriptionCompact,
+		Tools: []llm.Tool{
+			{
+				Name:               "get_weather",
+				Description:        "FULL DESCRIPTION should not appear",
+				CompactDescription: "compact weather desc",
+				InputSchema:        json.RawMessage(`{"type":"object"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotBody, "compact weather desc") {
+		t.Errorf("expected compact description in body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, "FULL DESCRIPTION") {
+		t.Errorf("did not expect full description in body, got %s", gotBody)
+	}
+}
+
 func TestChatWithSystemPrompt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -1815,6 +1854,50 @@ func TestListModelsCapabilityFilterEmbeddings(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("model %s missing embeddings capability", info.ID)
+		}
+	}
+}
+
+func TestListModelsWithMetadataEmbeddingDimensions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"text-embedding-3-small"},
+			{"id":"text-embedding-3-large"},
+			{"id":"text-embedding-ada-002"},
+			{"id":"gpt-4o"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	infos, err := c.ListModelsWithMetadata(context.Background(),
+		llm.WithCapabilities(llm.ModelCapabilityEmbeddings))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID := make(map[string]llm.ModelInfo, len(infos))
+	for _, info := range infos {
+		byID[info.ID] = info
+	}
+
+	cases := []struct {
+		id   string
+		want int
+	}{
+		{"text-embedding-3-small", 1536},
+		{"text-embedding-3-large", 3072},
+		{"text-embedding-ada-002", 1536},
+	}
+	for _, tc := range cases {
+		info, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("model %q not found in results", tc.id)
+			continue
+		}
+		if info.Dimensions != tc.want {
+			t.Errorf("model %q: Dimensions = %d, want %d", tc.id, info.Dimensions, tc.want)
 		}
 	}
 }

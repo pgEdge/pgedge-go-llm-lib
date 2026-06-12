@@ -12,6 +12,9 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -508,5 +511,152 @@ func TestIntHelper(t *testing.T) {
 	q := Int(7)
 	if p == q {
 		t.Errorf("Int reused pointer across calls")
+	}
+}
+
+func TestTokenUsageCacheSavingsPercent(t *testing.T) {
+	cases := []struct {
+		name string
+		u    TokenUsage
+		want float64
+	}{
+		{"zero", TokenUsage{}, 0},
+		{"no cache", TokenUsage{PromptTokens: 100}, 0},
+		{"half cached", TokenUsage{PromptTokens: 50, CacheReadInputTokens: 50}, 50},
+		{"with creation", TokenUsage{PromptTokens: 0, CacheReadInputTokens: 90, CacheCreationInputTokens: 10}, 90},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.u.CacheSavingsPercent(); got != c.want {
+				t.Fatalf("CacheSavingsPercent() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestToolChoiceJSONTags(t *testing.T) {
+	tc := ToolChoice{Mode: ToolChoiceSpecific, Name: "get_weather"}
+	b, err := json.Marshal(tc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	want := `{"mode":"specific","name":"get_weather"}`
+	if got != want {
+		t.Fatalf("marshal mismatch:\n got %s\nwant %s", got, want)
+	}
+
+	var rt ToolChoice
+	if err := json.Unmarshal([]byte(`{"mode":"auto"}`), &rt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rt.Mode != ToolChoiceAuto {
+		t.Fatalf("mode = %q, want %q", rt.Mode, ToolChoiceAuto)
+	}
+	if rt.Name != "" {
+		t.Fatalf("name = %q, want empty", rt.Name)
+	}
+}
+
+func TestWithDefaultsAPIKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key")
+	if err := os.WriteFile(path, []byte("  secret-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	o := Options{APIKeyFile: path}.WithDefaults()
+	if o.APIKey != "secret-key" {
+		t.Fatalf("APIKey = %q, want %q", o.APIKey, "secret-key")
+	}
+
+	o2 := Options{APIKey: "explicit", APIKeyFile: path}.WithDefaults()
+	if o2.APIKey != "explicit" {
+		t.Fatalf("APIKey = %q, want explicit", o2.APIKey)
+	}
+
+	o3 := Options{APIKeyFile: filepath.Join(dir, "nope")}.WithDefaults()
+	if o3.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty for missing file", o3.APIKey)
+	}
+}
+
+func TestModelInfoDimensionsJSON(t *testing.T) {
+	b, _ := json.Marshal(ModelInfo{ID: "m", Dimensions: 1536})
+	if !strings.Contains(string(b), `"dimensions":1536`) {
+		t.Fatalf("missing dimensions tag: %s", b)
+	}
+	b2, _ := json.Marshal(ModelInfo{ID: "m"})
+	if strings.Contains(string(b2), "dimensions") {
+		t.Fatalf("zero dimensions should be omitted: %s", b2)
+	}
+}
+
+func TestToolCompactDescriptionJSON(t *testing.T) {
+	tool := Tool{
+		Name:               "get_weather",
+		Description:        "Get the current weather for a named city in detail",
+		CompactDescription: "short",
+		InputSchema:        json.RawMessage(`{"type":"object"}`),
+	}
+	data, err := json.Marshal(tool)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"compact_description":"short"`) {
+		t.Errorf("expected compact_description in JSON, got %s", data)
+	}
+
+	// Omitted when empty.
+	tool.CompactDescription = ""
+	data, err = json.Marshal(tool)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	if strings.Contains(string(data), "compact_description") {
+		t.Errorf("expected compact_description omitted, got %s", data)
+	}
+}
+
+func TestEffectiveToolDescription(t *testing.T) {
+	full := Tool{Description: "the full description", CompactDescription: "compact"}
+	noCompact := Tool{Description: "only full"}
+
+	if got := EffectiveToolDescription(full, true); got != "compact" {
+		t.Errorf("useCompact=true: got %q, want %q", got, "compact")
+	}
+	if got := EffectiveToolDescription(full, false); got != "the full description" {
+		t.Errorf("useCompact=false: got %q, want %q", got, "the full description")
+	}
+	if got := EffectiveToolDescription(noCompact, true); got != "only full" {
+		t.Errorf("useCompact=true, no compact: got %q, want %q", got, "only full")
+	}
+}
+
+func TestUseCompactDescriptions(t *testing.T) {
+	const localURL = "http://localhost:11434"
+	const remoteURL = "https://api.openai.com/v1"
+
+	tests := []struct {
+		name    string
+		mode    ToolDescriptionMode
+		baseURL string
+		want    bool
+	}{
+		{"compact forces true", ToolDescriptionCompact, remoteURL, true},
+		{"full forces false", ToolDescriptionFull, localURL, false},
+		{"default local", ToolDescriptionDefault, localURL, true},
+		{"default remote", ToolDescriptionDefault, remoteURL, false},
+		{"auto local", ToolDescriptionAuto, localURL, true},
+		{"auto remote", ToolDescriptionAuto, remoteURL, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ChatRequest{ToolDescriptions: tt.mode}
+			if got := req.UseCompactDescriptions(tt.baseURL); got != tt.want {
+				t.Errorf("UseCompactDescriptions(%q) with mode %q = %v, want %v",
+					tt.baseURL, tt.mode, got, tt.want)
+			}
+		})
 	}
 }

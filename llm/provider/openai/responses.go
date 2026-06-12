@@ -194,12 +194,13 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 	}
 
 	if len(req.Tools) > 0 {
+		useCompact := req.UseCompactDescriptions(c.baseURL)
 		out.Tools = make([]responsesTool, len(req.Tools))
 		for i, t := range req.Tools {
 			out.Tools[i] = responsesTool{
 				Type:        "function",
 				Name:        t.Name,
-				Description: t.Description,
+				Description: llm.EffectiveToolDescription(t, useCompact),
 				Parameters:  t.InputSchema,
 			}
 		}

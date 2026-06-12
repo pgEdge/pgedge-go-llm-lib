@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
@@ -271,6 +272,48 @@ func TestHandleChatRoundtrips(t *testing.T) {
 	}
 	if got.Usage.TotalTokens != 7 {
 		t.Errorf("usage.total = %d", got.Usage.TotalTokens)
+	}
+}
+
+func TestHandleChatPropagatesToolDescriptions(t *testing.T) {
+	f := &fakeProvider{
+		chatResp: &llm.ChatResponse{
+			Content:    []llm.ContentBlock{{Type: "text", Text: "ok"}},
+			StopReason: "stop",
+		},
+	}
+	setFake(f)
+
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers: map[string]llm.Options{
+			"fake": {Model: "alpha"},
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages:         []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+		ToolDescriptions: llm.ToolDescriptionCompact,
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	f.mu.RLock()
+	got := f.chatReq
+	f.mu.RUnlock()
+	if got == nil {
+		t.Fatal("provider did not receive a Chat request")
+	}
+	if got.ToolDescriptions != llm.ToolDescriptionCompact {
+		t.Errorf("ToolDescriptions = %q, want %q", got.ToolDescriptions, llm.ToolDescriptionCompact)
 	}
 }
 
@@ -748,6 +791,44 @@ func TestAuthorizeRejectsWithCustomStatus(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestAuthorizeRejectionForwardsRequestID verifies that an Authorize
+// rejection threads the request ID into OnError, matching the
+// behaviour of every other error path.
+func TestAuthorizeRejectionForwardsRequestID(t *testing.T) {
+	setFake(&fakeProvider{})
+	var gotReqID string
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		Authorize: func(*http.Request) error {
+			return fmt.Errorf("nope")
+		},
+		OnError: func(_ *http.Request, info proxy.ErrorInfo) {
+			gotReqID = info.RequestID
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "auth-reqid-42")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	if gotReqID != "auth-reqid-42" {
+		t.Errorf("OnError RequestID = %q, want auth-reqid-42", gotReqID)
 	}
 }
 
@@ -1793,5 +1874,521 @@ func TestEmbedMultimodalUpstreamError(t *testing.T) {
 	p.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", rec.Code)
+	}
+}
+
+// TestNewAppliesConfigDefaults locks the default /v1 prefix behaviour
+// before Task 8 makes the prefix configurable. It verifies that a
+// Proxy created with an empty PathPrefix still serves /v1/health at
+// the expected path.
+func TestNewAppliesConfigDefaults(t *testing.T) {
+	setFake(&fakeProvider{models: []string{"alpha"}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/health status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestHandlerHonoursPathPrefix verifies that when PathPrefix is set to
+// a non-default value, Handler() registers routes under that prefix and
+// the old default prefix (/v1) returns 404.
+func TestHandlerHonoursPathPrefix(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		PathPrefix:      "/api/llm",
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	r1, err := http.Get(srv.URL + "/api/llm/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusOK {
+		t.Fatalf("/api/llm/health = %d, want 200", r1.StatusCode)
+	}
+	r2, err := http.Get(srv.URL + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusNotFound {
+		t.Fatalf("/v1/health = %d, want 404 when prefix overridden", r2.StatusCode)
+	}
+}
+
+// TestHandlerWithSlashPrefixFallsBackToDefault verifies that a
+// PathPrefix of "/" (or any all-slashes string) normalises to the
+// default "/v1" and that /v1/health is reachable.
+func TestHandlerWithSlashPrefixFallsBackToDefault(t *testing.T) {
+	setFake(&fakeProvider{models: []string{"alpha"}})
+	p := proxy.New(proxy.Config{
+		PathPrefix:      "/",
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/health with PathPrefix='/' status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestChatRejectsOversizedBody verifies that a MaxBodyBytes limit is
+// enforced for POST /v1/chat, returning 400 when the body exceeds the
+// configured ceiling.
+func TestChatRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'a')
+	}
+	big = append(big, []byte(`"}]}]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized body", resp.StatusCode)
+	}
+}
+
+// TestChatStreamRejectsOversizedBody verifies the MaxBodyBytes limit on
+// POST /v1/chat/stream.
+func TestChatStreamRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'a')
+	}
+	big = append(big, []byte(`"}]}]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/chat/stream", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized body", resp.StatusCode)
+	}
+}
+
+// TestEmbedRejectsOversizedBody verifies the MaxBodyBytes limit on
+// POST /v1/embed.
+func TestEmbedRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{embedVec: [][]float64{{0.1}}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"provider":"fake","input":["`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'x')
+	}
+	big = append(big, []byte(`"]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/embed", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized embed body", resp.StatusCode)
+	}
+}
+
+// TestRerankRejectsOversizedBody verifies the MaxBodyBytes limit on
+// POST /v1/rerank.
+func TestRerankRejectsOversizedBody(t *testing.T) {
+	setFake(&fakeProvider{rerankResp: &llm.RerankResponse{
+		Results: []llm.RerankResult{{Index: 0, RelevanceScore: 0.9}},
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    64,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	big := make([]byte, 0, 512)
+	big = append(big, []byte(`{"provider":"fake","query":"q","documents":["`)...)
+	for i := 0; i < 400; i++ {
+		big = append(big, 'd')
+	}
+	big = append(big, []byte(`"]}`)...)
+
+	resp, err := http.Post(srv.URL+"/v1/rerank", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized rerank body", resp.StatusCode)
+	}
+}
+
+// TestMaxBodyBytesZeroAllowsNormalRequest verifies that when MaxBodyBytes
+// is 0 (unlimited), a normal-sized request succeeds with 200.
+func TestMaxBodyBytesZeroAllowsNormalRequest(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    0,
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hello")},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 when MaxBodyBytes=0 (unlimited)", resp.StatusCode)
+	}
+}
+
+// TestMaxBodyBytesGenerousLimitAllowsNormalRequest verifies that a
+// generous MaxBodyBytes limit does not block a normal-sized request.
+func TestMaxBodyBytesGenerousLimitAllowsNormalRequest(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}})
+	p := proxy.New(proxy.Config{
+		MaxBodyBytes:    1 << 20, // 1 MiB — generous for a normal request
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hello")},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with generous MaxBodyBytes", resp.StatusCode)
+	}
+}
+
+// TestTransformRequestMutatesChat verifies the TransformRequest hook can
+// rewrite the request and that the mutation reaches the provider's Chat
+// call. The fake captures the dispatched request in f.chatReq.
+func TestTransformRequestMutatesChat(t *testing.T) {
+	f := &fakeProvider{chatResp: &llm.ChatResponse{
+		Content: []llm.ContentBlock{{Type: "text", Text: "ok"}}, StopReason: "stop",
+	}}
+	setFake(f)
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, req *llm.ChatRequest) error {
+			req.SystemPrompt = "INJECTED"
+			return nil
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	f.mu.RLock()
+	got := f.chatReq
+	f.mu.RUnlock()
+	if got == nil {
+		t.Fatal("provider did not receive a Chat request")
+	}
+	if got.SystemPrompt != "INJECTED" {
+		t.Fatalf("provider saw SystemPrompt = %q, want INJECTED", got.SystemPrompt)
+	}
+}
+
+type transformErr struct{ status int }
+
+func (transformErr) Error() string     { return "denied" }
+func (e transformErr) HTTPStatus() int { return e.status }
+
+// TestTransformRequestRejectsWithStatus verifies a TransformRequest error
+// carrying an HTTPStatus() method rejects the request with that status.
+func TestTransformRequestRejectsWithStatus(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{StopReason: "stop"}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+			return transformErr{status: http.StatusForbidden}
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, _ := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestTransformRequestRejectsDefaultStatus verifies a plain error from
+// TransformRequest (no HTTPStatus method) yields the default 400.
+func TestTransformRequestRejectsDefaultStatus(t *testing.T) {
+	setFake(&fakeProvider{chatResp: &llm.ChatResponse{StopReason: "stop"}})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+			return errors.New("nope")
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, _ := http.Post(srv.URL+"/v1/chat", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestTransformRequestMutatesStream verifies the hook also fires on the
+// streaming path and that the mutation reaches ChatStream. The streamFn
+// captures the request the proxy dispatched.
+func TestTransformRequestMutatesStream(t *testing.T) {
+	var mu sync.Mutex
+	var seen string
+	f := &fakeProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+			mu.Lock()
+			seen = req.SystemPrompt
+			mu.Unlock()
+			return nil, llm.ErrNotSupported
+		},
+	}
+	setFake(f)
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, req *llm.ChatRequest) error {
+			req.SystemPrompt = "STREAM-INJECTED"
+			return nil
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, err := http.Post(srv.URL+"/v1/chat/stream", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	mu.Lock()
+	got := seen
+	mu.Unlock()
+	if got != "STREAM-INJECTED" {
+		t.Fatalf("ChatStream saw SystemPrompt = %q, want STREAM-INJECTED", got)
+	}
+}
+
+func TestHandleProvidersIncludesDisplayName(t *testing.T) {
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "anthropic",
+		Providers: map[string]llm.Options{
+			"anthropic":   {Model: "claude"},
+			"weirdcustom": {Model: "x"},
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var pr proxy.ProvidersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]proxy.ProviderInfo{}
+	for _, info := range pr.Providers {
+		byName[info.Name] = info
+	}
+	if byName["anthropic"].DisplayName != "Anthropic" {
+		t.Fatalf("anthropic display = %q, want Anthropic", byName["anthropic"].DisplayName)
+	}
+	if byName["weirdcustom"].DisplayName != "weirdcustom" {
+		t.Fatalf("unknown provider display name = %q, want raw name %q",
+			byName["weirdcustom"].DisplayName, "weirdcustom")
+	}
+}
+
+// TestTransformRequestStreamRejectsWithStatus verifies that a rejection
+// before the stream starts yields a non-200 status on the streaming
+// endpoint, because the transform runs before SSE headers are written.
+func TestTransformRequestStreamRejectsWithStatus(t *testing.T) {
+	setFake(&fakeProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest) (*llm.Stream, error) {
+			return nil, llm.ErrNotSupported
+		},
+	})
+	p := proxy.New(proxy.Config{
+		DefaultProvider: "fake",
+		Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+		TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+			return transformErr{status: http.StatusForbidden}
+		},
+	})
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	body, _ := json.Marshal(proxy.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	resp, _ := http.Post(srv.URL+"/v1/chat/stream", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	// The rejection happens before any SSE framing begins, so the
+	// response must be a JSON error rather than an event stream.
+	if ct := resp.Header.Get("Content-Type"); ct == "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want non-SSE (SSE framing must not begin)", ct)
+	} else if ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+// TestTransformRejectionForwardsResolvedInfo verifies that when
+// TransformRequest rejects a request, the OnError ErrorInfo carries the
+// resolved provider and model (here a per-request model override) and
+// the correct Stream flag for both the non-stream and stream paths.
+func TestTransformRejectionForwardsResolvedInfo(t *testing.T) {
+	cases := []struct {
+		name       string
+		path       string
+		wantStream bool
+	}{
+		{"chat", "/v1/chat", false},
+		{"chat-stream", "/v1/chat/stream", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setFake(&fakeProvider{
+				chatResp: &llm.ChatResponse{StopReason: "stop"},
+				streamFn: func(_ context.Context, _ llm.ChatRequest) (*llm.Stream, error) {
+					return nil, llm.ErrNotSupported
+				},
+			})
+			var got proxy.ErrorInfo
+			p := proxy.New(proxy.Config{
+				DefaultProvider: "fake",
+				Providers:       map[string]llm.Options{"fake": {Model: "alpha"}},
+				TransformRequest: func(_ *http.Request, _ *llm.ChatRequest) error {
+					return transformErr{status: http.StatusForbidden}
+				},
+				OnError: func(_ *http.Request, info proxy.ErrorInfo) {
+					got = info
+				},
+			})
+			srv := httptest.NewServer(p.Handler())
+			defer srv.Close()
+			body, _ := json.Marshal(proxy.ChatRequest{
+				Model:    "beta",
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+			})
+			resp, err := http.Post(srv.URL+tc.path, "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", resp.StatusCode)
+			}
+			if got.Provider != "fake" {
+				t.Errorf("ErrorInfo.Provider = %q, want fake", got.Provider)
+			}
+			if got.Model != "beta" {
+				t.Errorf("ErrorInfo.Model = %q, want beta (resolved override)", got.Model)
+			}
+			if got.Stream != tc.wantStream {
+				t.Errorf("ErrorInfo.Stream = %v, want %v", got.Stream, tc.wantStream)
+			}
+			if got.StatusCode != http.StatusForbidden {
+				t.Errorf("ErrorInfo.StatusCode = %d, want 403", got.StatusCode)
+			}
+			if got.Err == nil {
+				t.Error("ErrorInfo.Err = nil, want non-nil")
+			}
+		})
 	}
 }

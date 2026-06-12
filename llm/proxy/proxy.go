@@ -14,9 +14,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
@@ -34,7 +36,8 @@ type Config struct {
 	Providers       map[string]llm.Options
 
 	// Hooks are invoked for telemetry / auth side-effects. They run
-	// synchronously in the request goroutine; keep them fast.
+	// synchronously in the request goroutine; keep them fast. A panic
+	// in any of these hooks aborts the request and is not recovered.
 	OnRequest  func(r *http.Request, info RequestInfo)
 	OnResponse func(r *http.Request, info ResponseInfo)
 	OnError    func(r *http.Request, info ErrorInfo)
@@ -45,15 +48,44 @@ type Config struct {
 	// MAY mutate the request — e.g. attaching context values for
 	// downstream hooks.
 	//
-	// Authorize fires for every endpoint including GET /v1/providers,
-	// /v1/models, and /v1/health.
+	// Authorize fires for every endpoint registered under the
+	// configured PathPrefix: the provider, model, and health listing
+	// endpoints as well as the chat, embed, and rerank endpoints.
+	//
+	// Authorize runs synchronously in the request goroutine; a panic in
+	// the hook aborts the request and is not recovered.
 	Authorize func(*http.Request) error
+
+	// TransformRequest, if set, is invoked after the request is parsed and
+	// before it is dispatched to the provider. It MAY mutate the request
+	// (SystemPrompt, Messages, Tools). Returning a non-nil error rejects the
+	// request with status 400, overridable via an HTTPStatus() int method on
+	// the error. This is the sanctioned request-rewrite hook; do not mutate
+	// via OnRequest.
+	//
+	// OnRequest (and any telemetry) observes the request AFTER
+	// TransformRequest has run: it sees the final dispatched request,
+	// including any mutations TransformRequest applied.
+	//
+	// TransformRequest runs synchronously in the request goroutine; a
+	// panic in the hook aborts the request and is not recovered.
+	TransformRequest func(r *http.Request, req *llm.ChatRequest) error
 
 	// RequestIDHeader is the header name to read for an incoming
 	// request ID and write on outgoing responses. Defaults to
 	// "X-Request-ID" when empty. Set to "-" to disable request-ID
 	// propagation entirely.
 	RequestIDHeader string
+
+	// PathPrefix is the base path under which routes are registered.
+	// Defaults to "/v1" when empty. A value of "/" or any string consisting
+	// entirely of slashes is also treated as empty and falls back to "/v1".
+	// A leading slash is added and a trailing slash trimmed during normalisation.
+	PathPrefix string
+
+	// MaxBodyBytes limits the request body size for /chat, /chat/stream,
+	// /embed, and /rerank. 0 means unlimited.
+	MaxBodyBytes int64
 }
 
 // RequestInfo describes an incoming chat request, supplied to OnRequest.
@@ -62,7 +94,9 @@ type Config struct {
 // hand to the provider, with messages, tools, system prompt,
 // tool-choice, response format, and stop sequences populated. It is
 // nil only when the request failed to parse before this hook fires
-// (in which case OnError fires instead).
+// (in which case OnError fires instead). The request reflects any
+// mutations applied by TransformRequest: it is the post-transform,
+// about-to-be-dispatched request.
 //
 // Hooks that want to log prompt content, tool definitions, or
 // per-request overrides read this field. The pointer is to a value
@@ -179,19 +213,52 @@ func randomRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// httpStatusOf returns the HTTP status an error requests via an
+// HTTPStatus() int method, or fallback if it does not implement one.
+func httpStatusOf(err error, fallback int) int {
+	var hs interface{ HTTPStatus() int }
+	if errors.As(err, &hs) {
+		return hs.HTTPStatus()
+	}
+	return fallback
+}
+
 // authorize runs the Authorize hook (if configured). Returns true
 // if the request should proceed, false if it was rejected (writeError
-// was called with an appropriate status).
-func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request) bool {
+// was called with an appropriate status). The supplied info carries any
+// context known at the call site (e.g. the request ID) into the
+// ErrorInfo so rejections preserve that context like every other error.
+// authorize runs before request parsing, so the provider and model are
+// not yet known and must not be set on info by callers.
+func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request, info ErrorInfo) bool {
 	if p.cfg.Authorize == nil {
 		return true
 	}
 	if err := p.cfg.Authorize(r); err != nil {
-		status := http.StatusUnauthorized
-		if hs, ok := err.(interface{ HTTPStatus() int }); ok {
-			status = hs.HTTPStatus()
-		}
-		p.writeError(w, r, ErrorInfo{StatusCode: status, Err: err})
+		info.StatusCode = httpStatusOf(err, http.StatusUnauthorized)
+		info.Err = err
+		p.writeError(w, r, info)
+		return false
+	}
+	return true
+}
+
+// transform runs the TransformRequest hook (if configured) against the
+// already-built llm.ChatRequest, before dispatch to the provider. The
+// hook MAY mutate llmReq in place. Returns true if the request should
+// proceed, false if it was rejected (writeError was called with status
+// 400 by default, overridable via an HTTPStatus() int method on the
+// returned error). The supplied info carries the resolved provider,
+// model, stream flag, and request ID into the ErrorInfo so transform
+// rejections surface the same telemetry as a successful dispatch.
+func (p *Proxy) transform(w http.ResponseWriter, r *http.Request, info ErrorInfo, llmReq *llm.ChatRequest) bool {
+	if p.cfg.TransformRequest == nil {
+		return true
+	}
+	if err := p.cfg.TransformRequest(r, llmReq); err != nil {
+		info.StatusCode = httpStatusOf(err, http.StatusBadRequest)
+		info.Err = err
+		p.writeError(w, r, info)
 		return false
 	}
 	return true
@@ -207,8 +274,26 @@ func encodeJSON(w io.Writer, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+// withDefaults returns a copy of c with all defaultable fields resolved.
+// It is called by New after the defensive Providers copy so that every
+// Proxy stores a fully-normalised Config.
+//
+// PathPrefix normalisation: strip all leading and trailing slashes; if
+// the result is empty (covers "", "/", "///", …) fall back to "v1".
+// The final stored value always starts with exactly one slash and has
+// no trailing slash, e.g. "/v1" or "/api/llm".
+func (c Config) withDefaults() Config {
+	trimmed := strings.Trim(c.PathPrefix, "/")
+	if trimmed == "" {
+		trimmed = "v1"
+	}
+	c.PathPrefix = "/" + trimmed
+	return c
+}
+
 // New creates a Proxy from the given Config. Call Handler on the
-// result to get the http.Handler that serves:
+// result to get the http.Handler that serves (paths assume the default
+// Config.PathPrefix of "/v1"; setting PathPrefix changes the base):
 //
 //	GET  /v1/health                — ping all configured providers
 //	GET  /v1/providers             — list configured providers
@@ -224,23 +309,26 @@ func New(cfg Config) *Proxy {
 		providers[k] = v
 	}
 	cfg.Providers = providers
-	return &Proxy{cfg: cfg}
+	return &Proxy{cfg: cfg.withDefaults()}
 }
 
 // Handler returns the http.Handler for this proxy.
 //
-// Mount it under whatever path prefix you like — typically "/api"
-// using http.StripPrefix.
+// Routes are registered under p.cfg.PathPrefix (normalised by
+// withDefaults; default "/v1"). For example, with the default prefix
+// the health endpoint is at GET /v1/health; with PathPrefix "/api/llm"
+// it is at GET /api/llm/health.
 func (p *Proxy) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/health", p.handleHealth)
-	mux.HandleFunc("GET /v1/providers", p.handleProviders)
-	mux.HandleFunc("GET /v1/models", p.handleModels)
-	mux.HandleFunc("POST /v1/chat", p.handleChat)
-	mux.HandleFunc("POST /v1/chat/stream", p.handleChatStream)
-	mux.HandleFunc("POST /v1/embed", p.handleEmbed)
-	mux.HandleFunc("POST /v1/embed/multimodal", p.handleEmbedMultimodal)
-	mux.HandleFunc("POST /v1/rerank", p.handleRerank)
+	pfx := p.cfg.PathPrefix
+	mux.HandleFunc("GET "+pfx+"/health", p.handleHealth)
+	mux.HandleFunc("GET "+pfx+"/providers", p.handleProviders)
+	mux.HandleFunc("GET "+pfx+"/models", p.handleModels)
+	mux.HandleFunc("POST "+pfx+"/chat", p.handleChat)
+	mux.HandleFunc("POST "+pfx+"/chat/stream", p.handleChatStream)
+	mux.HandleFunc("POST "+pfx+"/embed", p.handleEmbed)
+	mux.HandleFunc("POST "+pfx+"/embed/multimodal", p.handleEmbedMultimodal)
+	mux.HandleFunc("POST "+pfx+"/rerank", p.handleRerank)
 	return mux
 }
 

@@ -22,21 +22,41 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
+// providerDisplayNames maps well-known provider registration names to
+// human-readable labels for use in UI pickers and similar surfaces.
+var providerDisplayNames = map[string]string{
+	"anthropic": "Anthropic",
+	"openai":    "OpenAI",
+	"gemini":    "Google Gemini",
+	"ollama":    "Ollama",
+	"voyage":    "Voyage AI",
+}
+
+// displayNameFor returns a human-readable label for a provider, falling back
+// to the raw registration name for unrecognised providers.
+func displayNameFor(name string) string {
+	if d, ok := providerDisplayNames[name]; ok {
+		return d
+	}
+	return name
+}
+
 func (p *Proxy) handleProviders(w http.ResponseWriter, r *http.Request) {
 	r, reqID := p.ensureRequestID(r)
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 
 	infos := make([]ProviderInfo, 0, len(p.cfg.Providers))
 	for name, opts := range p.cfg.Providers {
 		infos = append(infos, ProviderInfo{
-			Name:    name,
-			Model:   opts.Model,
-			Default: name == p.cfg.DefaultProvider,
+			Name:        name,
+			DisplayName: displayNameFor(name),
+			Model:       opts.Model,
+			Default:     name == p.cfg.DefaultProvider,
 		})
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
@@ -55,7 +75,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 
@@ -140,8 +160,11 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
+	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
 	}
 
 	req, opts, provider, model, err := p.parseChatRequest(r)
@@ -151,6 +174,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	llmReq := buildLLMRequest(req)
+	if !p.transform(w, r, ErrorInfo{Provider: provider, Model: model, Stream: false, RequestID: reqID}, &llmReq) {
+		return
+	}
 	if p.cfg.OnRequest != nil {
 		p.cfg.OnRequest(r, RequestInfo{
 			Provider:  provider,
@@ -222,14 +248,15 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 // llm.ChatRequest. Shared by handleChat and handleChatStream.
 func buildLLMRequest(req ChatRequest) llm.ChatRequest {
 	return llm.ChatRequest{
-		Messages:       req.Messages,
-		Tools:          req.Tools,
-		SystemPrompt:   req.SystemPrompt,
-		MaxTokens:      req.MaxTokens,
-		Temperature:    req.Temperature,
-		ResponseFormat: req.ResponseFormat,
-		ToolChoice:     req.ToolChoice,
-		StopSequences:  req.StopSequences,
+		Messages:         req.Messages,
+		Tools:            req.Tools,
+		SystemPrompt:     req.SystemPrompt,
+		MaxTokens:        req.MaxTokens,
+		Temperature:      req.Temperature,
+		ResponseFormat:   req.ResponseFormat,
+		ToolChoice:       req.ToolChoice,
+		StopSequences:    req.StopSequences,
+		ToolDescriptions: req.ToolDescriptions,
 	}
 }
 
@@ -267,7 +294,7 @@ func (p *Proxy) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 
@@ -312,8 +339,11 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
+	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
 	}
 
 	req, opts, provider, model, err := p.parseChatRequest(r)
@@ -323,6 +353,9 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	llmReq := buildLLMRequest(req)
+	if !p.transform(w, r, ErrorInfo{Provider: provider, Model: model, Stream: true, RequestID: reqID}, &llmReq) {
+		return
+	}
 	if p.cfg.OnRequest != nil {
 		p.cfg.OnRequest(r, RequestInfo{
 			Provider:  provider,
@@ -400,8 +433,11 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
+	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
 	}
 	var req EmbedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -454,8 +490,11 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
+	}
+	if p.cfg.MaxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
 	}
 	var req RerankRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -520,7 +559,7 @@ func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 	if reqID != "" {
 		w.Header().Set(p.requestIDHeaderName(), reqID)
 	}
-	if !p.authorize(w, r) {
+	if !p.authorize(w, r, ErrorInfo{RequestID: reqID}) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxEmbedMultimodalBodyBytes)
