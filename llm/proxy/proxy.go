@@ -119,6 +119,14 @@ type ErrorInfo struct {
 	StatusCode int
 	Err        error
 	RequestID  string // Empty if RequestIDHeader was set to "-"
+
+	// Duration is the wall-clock time spent on the upstream provider
+	// call when the error occurred during or after that call (measured
+	// from just before the provider request to the point of failure).
+	// It is zero when the error occurred before any upstream call was
+	// made — for example on authorization, request-parse, transform, or
+	// client-build failures — because no provider request had started.
+	Duration time.Duration
 }
 
 // ResponseInfo describes a completed chat response, supplied to OnResponse.
@@ -140,6 +148,12 @@ type ResponseInfo struct {
 	StatusCode int
 	RequestID  string // Empty if RequestIDHeader was set to "-"
 	Response   *llm.ChatResponse
+
+	// Duration is the wall-clock time spent on the upstream provider
+	// call, measured from just before the provider request to its
+	// completion. For streaming responses it covers the full stream,
+	// from initiating the call through to the final chunk.
+	Duration time.Duration
 }
 
 // AuthError indicates an Authorize hook rejected the request. Embed
