@@ -200,6 +200,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	chatResp, err := client.Chat(r.Context(), llmReq)
 	if err != nil {
 		p.writeError(w, r, ErrorInfo{
@@ -209,9 +210,11 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			StatusCode: http.StatusBadGateway,
 			Err:        err,
 			RequestID:  reqID,
+			Duration:   time.Since(start),
 		})
 		return
 	}
+	dur := time.Since(start)
 
 	out := ChatResponse{
 		Content:    chatResp.Content,
@@ -240,6 +243,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			Response:   chatResp,
 			StatusCode: http.StatusOK,
 			RequestID:  reqID,
+			Duration:   dur,
 		})
 	}
 }
@@ -379,6 +383,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	stream, err := client.ChatStream(r.Context(), llmReq)
 	if err != nil {
 		p.writeError(w, r, ErrorInfo{
@@ -388,6 +393,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			StatusCode: http.StatusBadGateway,
 			Err:        err,
 			RequestID:  reqID,
+			Duration:   time.Since(start),
 		})
 		return
 	}
@@ -399,6 +405,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	streamResp, streamErr := writeSSE(w, stream)
+	dur := time.Since(start)
 
 	if p.cfg.OnResponse != nil {
 		status := http.StatusOK
@@ -413,6 +420,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			StatusCode: status,
 			RequestID:  reqID,
 			Response:   streamResp,
+			Duration:   dur,
 		})
 	}
 
@@ -424,6 +432,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			StatusCode: http.StatusBadGateway,
 			Err:        streamErr,
 			RequestID:  reqID,
+			Duration:   dur,
 		})
 	}
 }
@@ -470,13 +479,14 @@ func (p *Proxy) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
 		return
 	}
+	start := time.Now()
 	vecs, err := client.EmbedBatch(r.Context(), req.Input)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, llm.ErrNotSupported) {
 			status = http.StatusNotImplemented
 		}
-		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID, Duration: time.Since(start)})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -527,6 +537,7 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: http.StatusInternalServerError, Err: err, RequestID: reqID})
 		return
 	}
+	start := time.Now()
 	libResp, err := client.Rerank(r.Context(), llm.RerankRequest{
 		Query: req.Query, Documents: req.Documents, TopK: req.TopK,
 	})
@@ -535,7 +546,7 @@ func (p *Proxy) handleRerank(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, llm.ErrNotSupported) {
 			status = http.StatusNotImplemented
 		}
-		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID, Duration: time.Since(start)})
 		return
 	}
 	out := RerankResponse{Usage: RerankUsage{TotalTokens: libResp.Usage.TotalTokens}}
@@ -627,13 +638,14 @@ func (p *Proxy) handleEmbedMultimodal(w http.ResponseWriter, r *http.Request) {
 		}
 		libReq.Inputs[i] = llm.MultimodalInput{Content: contents}
 	}
+	start := time.Now()
 	vecs, err := client.EmbedMultimodal(r.Context(), libReq)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, llm.ErrNotSupported) {
 			status = http.StatusNotImplemented
 		}
-		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID})
+		p.writeError(w, r, ErrorInfo{Provider: provider, StatusCode: status, Err: err, RequestID: reqID, Duration: time.Since(start)})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

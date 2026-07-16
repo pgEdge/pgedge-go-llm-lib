@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
@@ -44,6 +45,12 @@ type fakeProvider struct {
 	multimodalErr error               // when set, EmbedMultimodal returns this error
 	rerankResp    *llm.RerankResponse // when set, Rerank returns this
 	rerankErr     error               // when set, Rerank returns this error
+
+	// delay, when non-zero, makes each upstream provider call (Chat,
+	// EmbedBatch, Rerank, EmbedMultimodal) sleep for this long before
+	// returning, so timing-sensitive tests observe a measurable,
+	// deterministic upstream-call duration.
+	delay time.Duration
 }
 
 var (
@@ -71,11 +78,25 @@ func init() {
 	})
 }
 
+// sleepDelay pauses for the configured delay (if any) to give
+// timing-sensitive tests a measurable upstream-call duration. It reads
+// the delay under the read lock but does not hold any lock while sleeping.
+func (f *fakeProvider) sleepDelay() {
+	f.mu.RLock()
+	d := f.delay
+	f.mu.RUnlock()
+	if d > 0 {
+		time.Sleep(d)
+	}
+}
+
 func (f *fakeProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	f.mu.Lock()
 	captured := req
 	f.chatReq = &captured
 	f.mu.Unlock()
+
+	f.sleepDelay()
 
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -108,6 +129,7 @@ func (f *fakeProvider) Embed(_ context.Context, text string) ([]float64, error) 
 }
 
 func (f *fakeProvider) EmbedBatch(_ context.Context, _ []string) ([][]float64, error) {
+	f.sleepDelay()
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.embedErr != nil {
@@ -171,6 +193,7 @@ func (f *fakeProvider) ResetUsage() {
 }
 
 func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResponse, error) {
+	f.sleepDelay()
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.rerankErr != nil {
@@ -187,6 +210,7 @@ func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.Rera
 }
 
 func (f *fakeProvider) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
+	f.sleepDelay()
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.multimodalErr != nil {
