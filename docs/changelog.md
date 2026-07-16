@@ -10,6 +10,8 @@ project adheres to
 
 ## Unreleased
 
+## [0.1.1] - 2026-07-16
+
 ### Added
 - `ResponseInfo.Duration` and `ErrorInfo.Duration`: the wall-clock time spent on the upstream provider call, populated on the proxy `OnResponse` and `OnError` hook payloads so consumers can record how long a provider request took without instrumenting it themselves. The chat and streaming-chat handlers set it on both the success `ResponseInfo` and the upstream-call `ErrorInfo` (streaming covers the full stream to completion); the embed, rerank, and multimodal-embed handlers set it on their upstream-call `ErrorInfo`. Errors raised before any upstream call (authorization, request parsing, transform, client construction) leave `Duration` at zero. Both fields are additive on server-side hook structs that consumers only read, so this is backward compatible with 0.1.0
 
