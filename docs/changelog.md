@@ -10,6 +10,9 @@ project adheres to
 
 ## Unreleased
 
+### Fixed
+- `Options.WithDefaults()` no longer fills an unset `Temperature` with `0.7`. Previously this made it impossible for a caller to omit `temperature` from the wire: some models (e.g. newer Claude models) reject the field outright with `400: 'temperature' is deprecated for this model`. An unset `Temperature` (on both `Options` and `ChatRequest`) is now genuinely omitted; an explicitly-set value (including `0`) is unaffected
+
 ## [0.1.1] - 2026-07-16
 
 ### Added
