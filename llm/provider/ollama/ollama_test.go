@@ -594,6 +594,9 @@ func TestEmbedBatchAccumulatesUsage(t *testing.T) {
 	if usage.TotalTokens != 10 {
 		t.Errorf("expected TotalTokens 10, got %d", usage.TotalTokens)
 	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
 }
 
 func TestChatStream(t *testing.T) {

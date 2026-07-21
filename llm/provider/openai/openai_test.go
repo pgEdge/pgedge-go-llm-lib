@@ -627,6 +627,9 @@ func TestEmbedBatchAccumulatesUsage(t *testing.T) {
 	if usage.TotalTokens != 100 {
 		t.Errorf("expected TotalTokens 100, got %d", usage.TotalTokens)
 	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
 }
 
 // embedCaptureServer builds a /embeddings test server that decodes the

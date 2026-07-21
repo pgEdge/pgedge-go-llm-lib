@@ -485,6 +485,9 @@ func TestEmbedBatchAccumulatesUsage(t *testing.T) {
 	if usage.TotalTokens != 22 {
 		t.Errorf("expected TotalTokens 22, got %d", usage.TotalTokens)
 	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
 }
 
 func TestChatAuthError(t *testing.T) {
