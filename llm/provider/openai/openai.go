@@ -737,7 +737,8 @@ type openaiEmbedRequest struct {
 }
 
 type openaiEmbedResponse struct {
-	Data []openaiEmbedData `json:"data"`
+	Data  []openaiEmbedData `json:"data"`
+	Usage openaiUsage       `json:"usage"`
 }
 
 type openaiEmbedData struct {
@@ -771,6 +772,11 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 			Provider: providerName,
 		}
 	}
+	// Embeddings have no completion tokens; only prompt/total apply.
+	c.addUsage(llm.TokenUsage{
+		PromptTokens: resp.Usage.PromptTokens,
+		TotalTokens:  resp.Usage.TotalTokens,
+	})
 	return resp.Data[0].Embedding, nil
 }
 
@@ -800,6 +806,11 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 			result[d.Index] = d.Embedding
 		}
 	}
+	// Embeddings have no completion tokens; only prompt/total apply.
+	c.addUsage(llm.TokenUsage{
+		PromptTokens: resp.Usage.PromptTokens,
+		TotalTokens:  resp.Usage.TotalTokens,
+	})
 	return result, nil
 }
 

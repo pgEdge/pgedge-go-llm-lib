@@ -426,6 +426,67 @@ func TestEmbed(t *testing.T) {
 	}
 }
 
+func TestEmbedAccumulatesUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"embedding": map[string]any{
+				"values": []float64{0.1, 0.2, 0.3},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount": 11,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Embed(context.Background(), "hello world"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := c.Usage()
+	if usage.PromptTokens != 11 {
+		t.Errorf("expected PromptTokens 11, got %d", usage.PromptTokens)
+	}
+	// Embeddings have no completion tokens, so promptTokenCount is the total.
+	if usage.TotalTokens != 11 {
+		t.Errorf("expected TotalTokens 11, got %d", usage.TotalTokens)
+	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
+}
+
+func TestEmbedBatchAccumulatesUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": []map[string]any{
+				{"values": []float64{0.1, 0.2, 0.3}},
+				{"values": []float64{0.4, 0.5, 0.6}},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount": 22,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.EmbedBatch(context.Background(), []string{"hello", "world"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := c.Usage()
+	if usage.PromptTokens != 22 {
+		t.Errorf("expected PromptTokens 22, got %d", usage.PromptTokens)
+	}
+	if usage.TotalTokens != 22 {
+		t.Errorf("expected TotalTokens 22, got %d", usage.TotalTokens)
+	}
+}
+
 func TestChatAuthError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
