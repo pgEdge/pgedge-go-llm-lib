@@ -542,6 +542,63 @@ func TestEmbedBatch(t *testing.T) {
 	}
 }
 
+func TestEmbedAccumulatesUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"embeddings":        [][]float64{{0.1, 0.2, 0.3}},
+			"prompt_eval_count": 7,
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Embed(context.Background(), "hello world"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := c.Usage()
+	if usage.PromptTokens != 7 {
+		t.Errorf("expected PromptTokens 7, got %d", usage.PromptTokens)
+	}
+	// Embeddings have no completion tokens, so prompt_eval_count is the total.
+	if usage.TotalTokens != 7 {
+		t.Errorf("expected TotalTokens 7, got %d", usage.TotalTokens)
+	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
+}
+
+func TestEmbedBatchAccumulatesUsage(t *testing.T) {
+	// EmbedBatch issues one /api/embed call per input; usage from each
+	// successful call must accumulate across the batch.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"embeddings":        [][]float64{{0.1, 0.2, 0.3}},
+			"prompt_eval_count": 5,
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.EmbedBatch(context.Background(), []string{"hello", "world"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := c.Usage()
+	if usage.PromptTokens != 10 {
+		t.Errorf("expected PromptTokens 10, got %d", usage.PromptTokens)
+	}
+	if usage.TotalTokens != 10 {
+		t.Errorf("expected TotalTokens 10, got %d", usage.TotalTokens)
+	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
+}
+
 func TestChatStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

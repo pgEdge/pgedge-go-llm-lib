@@ -567,6 +567,71 @@ func TestEmbedBatch(t *testing.T) {
 	}
 }
 
+func TestEmbedAccumulatesUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{0.1, 0.2, 0.3}, "index": 0},
+			},
+			"usage": map[string]any{
+				"prompt_tokens": 42,
+				"total_tokens":  42,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Embed(context.Background(), "hello world"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := c.Usage()
+	if usage.PromptTokens != 42 {
+		t.Errorf("expected PromptTokens 42, got %d", usage.PromptTokens)
+	}
+	if usage.TotalTokens != 42 {
+		t.Errorf("expected TotalTokens 42, got %d", usage.TotalTokens)
+	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
+}
+
+func TestEmbedBatchAccumulatesUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{0.1, 0.2, 0.3}, "index": 0},
+				{"embedding": []float64{0.4, 0.5, 0.6}, "index": 1},
+			},
+			"usage": map[string]any{
+				"prompt_tokens": 100,
+				"total_tokens":  100,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.EmbedBatch(context.Background(), []string{"hello", "world"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	usage := c.Usage()
+	if usage.PromptTokens != 100 {
+		t.Errorf("expected PromptTokens 100, got %d", usage.PromptTokens)
+	}
+	if usage.TotalTokens != 100 {
+		t.Errorf("expected TotalTokens 100, got %d", usage.TotalTokens)
+	}
+	if usage.CompletionTokens != 0 {
+		t.Errorf("expected CompletionTokens 0, got %d", usage.CompletionTokens)
+	}
+}
+
 // embedCaptureServer builds a /embeddings test server that decodes the
 // request body into captured and returns a fixed one-vector response.
 func embedCaptureServer(t *testing.T, captured *map[string]any) *httptest.Server {

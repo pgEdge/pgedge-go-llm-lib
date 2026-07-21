@@ -224,7 +224,8 @@ type geminiEmbedRequest struct {
 }
 
 type geminiEmbedResponse struct {
-	Embedding geminiEmbedding `json:"embedding"`
+	Embedding     geminiEmbedding     `json:"embedding"`
+	UsageMetadata geminiUsageMetadata `json:"usageMetadata"`
 }
 
 type geminiEmbedding struct {
@@ -244,7 +245,8 @@ type geminiBatchEmbedSubRequest struct {
 }
 
 type geminiBatchEmbedResponse struct {
-	Embeddings []geminiEmbedding `json:"embeddings"`
+	Embeddings    []geminiEmbedding   `json:"embeddings"`
+	UsageMetadata geminiUsageMetadata `json:"usageMetadata"`
 }
 
 // ---------- ListModels types ----------
@@ -716,6 +718,12 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 			Provider: providerName,
 		}
 	}
+	// Gemini's embed endpoints report only promptTokenCount; embeddings
+	// have no completion tokens, so it doubles as the total.
+	c.addUsage(llm.TokenUsage{
+		PromptTokens: resp.UsageMetadata.PromptTokenCount,
+		TotalTokens:  resp.UsageMetadata.PromptTokenCount,
+	})
 	return resp.Embedding.Values, nil
 }
 
@@ -773,6 +781,12 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 		}
 		result[i] = emb.Values
 	}
+	// Gemini's embed endpoints report only promptTokenCount; embeddings
+	// have no completion tokens, so it doubles as the total.
+	c.addUsage(llm.TokenUsage{
+		PromptTokens: resp.UsageMetadata.PromptTokenCount,
+		TotalTokens:  resp.UsageMetadata.PromptTokenCount,
+	})
 	return result, nil
 }
 

@@ -647,7 +647,8 @@ func (c *client) embedOptions() map[string]any {
 }
 
 type ollamaEmbedResponse struct {
-	Embeddings [][]float64 `json:"embeddings"`
+	Embeddings      [][]float64 `json:"embeddings"`
+	PromptEvalCount int         `json:"prompt_eval_count,omitempty"`
 }
 
 func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
@@ -709,6 +710,14 @@ func (c *client) embedOnce(ctx context.Context, text string) ([]float64, int, []
 			Provider: providerName,
 		}
 	}
+	// Embeddings have no completion tokens, so prompt_eval_count is both
+	// the prompt and total count. Accumulating here (rather than in
+	// Embed/EmbedBatch) means each successful call is counted exactly
+	// once, including EmbedBatch's per-item calls and truncation retries.
+	c.addUsage(llm.TokenUsage{
+		PromptTokens: resp.PromptEvalCount,
+		TotalTokens:  resp.PromptEvalCount,
+	})
 	return resp.Embeddings[0], status, body, nil
 }
 

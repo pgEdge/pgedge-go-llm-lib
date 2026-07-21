@@ -11,6 +11,7 @@ project adheres to
 ## Unreleased
 
 ### Fixed
+- `Client.Usage()` now accumulates embedding token usage for the OpenAI, Gemini, and Ollama providers. Previously only Voyage tracked embedding usage; the other three parsed the embedding vectors but discarded the provider's token counts, so a caller reading `Usage()` after `Embed`/`EmbedBatch` under-reported by the full embedding cost. The embed response types now capture the provider's usage payload (`usage.{prompt_tokens,total_tokens}` for OpenAI, `usageMetadata.promptTokenCount` for Gemini, and `prompt_eval_count` for Ollama) and feed it into the cumulative counter. Embeddings carry no completion tokens, so only `PromptTokens`/`TotalTokens` are populated
 - `Options.WithDefaults()` no longer fills an unset `Temperature` with `0.7`. Previously this made it impossible for a caller to omit `temperature` from the wire: some models (e.g. newer Claude models) reject the field outright with `400: 'temperature' is deprecated for this model`. An unset `Temperature` (on both `Options` and `ChatRequest`) is now genuinely omitted; an explicitly-set value (including `0`) is unaffected
 - A request whose body is large enough to exceed OS socket buffers (e.g. a large `EmbedBatch` call), sent to a peer that never reads it, no longer leaves its connection open indefinitely after the caller's context expires. Context cancellation alone does not reliably interrupt a body write blocked at the OS level; the underlying connection is now force-closed in that case, for both the overall request context and `PerAttemptTimeout`
 
