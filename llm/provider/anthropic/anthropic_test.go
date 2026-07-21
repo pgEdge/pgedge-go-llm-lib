@@ -1138,6 +1138,52 @@ func TestExplicitZeroTemperatureReachesWire(t *testing.T) {
 	}
 }
 
+// TestUnsetTemperatureOmittedFromWire is a regression test: Options
+// used to default Temperature to 0.7 when unset, which some models
+// (e.g. newer Claude models) reject outright with "400: `temperature`
+// is deprecated for this model". When neither Options nor ChatRequest
+// set Temperature, it must now be omitted from the wire entirely.
+func TestUnsetTemperatureOmittedFromWire(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{
+				{"type": "text", "text": "ok"},
+			},
+			"stop_reason": "end_turn",
+			"usage": map[string]any{
+				"input_tokens":  1,
+				"output_tokens": 1,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c, err := llm.NewClient(providerName, llm.Options{
+		APIKey:  "k",
+		BaseURL: srv.URL,
+		Model:   "test",
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if temp, present := captured["temperature"]; present {
+		t.Errorf("temperature should be omitted from wire when unset, got %v", temp)
+	}
+}
+
 func TestAnthropicMaxTokensFallbackWhenNilEverywhere(t *testing.T) {
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
