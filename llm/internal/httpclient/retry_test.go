@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -678,6 +679,117 @@ func TestRetryTransportPerAttemptTimeoutDoesNotInterruptBody(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "second") {
 		t.Errorf("body truncated by per-attempt timeout: %q", body)
+	}
+}
+
+// blockingRoundTripper is a fake http.RoundTripper that fires GotConn
+// (as any real Transport would once it acquires a connection) and then
+// blocks until that exact connection is closed — never on its own, and
+// never by watching the request's context. This models a request body
+// write that is genuinely stuck at the OS level: a real blocked write
+// is not interrupted by context cancellation alone (see issue #22),
+// only by forcibly closing the underlying connection. Recreating the
+// actual OS-level buffer-filling condition in a test is inherently
+// flaky (it depends on platform-specific socket buffer sizes), so this
+// tests the hard-cancel mechanism itself, deterministically, instead.
+type blockingRoundTripper struct {
+	conn *fakeConn
+}
+
+func (rt *blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.GotConn != nil {
+		trace.GotConn(httptrace.GotConnInfo{Conn: rt.conn})
+	}
+	<-rt.conn.closedCh
+	return nil, errors.New("connection closed")
+}
+
+func TestRoundTripWithTimeout_HardCancelClosesBlockedWriteOnPerAttemptTimeout(t *testing.T) {
+	fc := newFakeConn()
+	rt := &blockingRoundTripper{conn: fc}
+
+	req, _ := http.NewRequest(http.MethodPost, "http://example.invalid", nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := roundTripWithTimeout(rt, req, 50*time.Millisecond)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("roundTripWithTimeout did not return within 2s; the per-attempt timeout did not hard-cancel the blocked write")
+	}
+
+	if !fc.isClosed() {
+		t.Error("expected the per-attempt hard-cancel to have closed the connection")
+	}
+}
+
+// roundTripperFunc adapts a plain function to http.RoundTripper.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+// TestRoundTripWithTimeout_NonTimeoutErrorPropagates covers the plain
+// error path: the attempt fails quickly, well within the per-attempt
+// budget, so timer.Stop() succeeds and timedOut is false. The
+// underlying error must be returned as-is, not reshaped into a
+// per-attempt timeout.
+func TestRoundTripWithTimeout_NonTimeoutErrorPropagates(t *testing.T) {
+	wantErr := errors.New("boom")
+	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, wantErr
+	})
+
+	req, _ := http.NewRequest(http.MethodGet, "http://example.invalid", nil)
+	_, err := roundTripWithTimeout(rt, req, 100*time.Millisecond)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want %v", err, wantErr)
+	}
+}
+
+// TestRoundTripWithTimeout_SuccessAfterTimeoutFiredIsTreatedAsTimeout
+// covers the "boundary race" documented in roundTripWithTimeout: the
+// per-attempt timer fires while the attempt is still in flight, but
+// the attempt then goes on to succeed anyway. That success must still
+// be discarded and reported as a timeout, since a caller who already
+// gave up on this attempt should not be handed a live response body.
+func TestRoundTripWithTimeout_SuccessAfterTimeoutFiredIsTreatedAsTimeout(t *testing.T) {
+	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		time.Sleep(100 * time.Millisecond) // exceed the per-attempt timeout below
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("late"))}, nil
+	})
+
+	req, _ := http.NewRequest(http.MethodGet, "http://example.invalid", nil)
+	_, err := roundTripWithTimeout(rt, req, 20*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestRoundTripWithTimeout_OuterContextCancelledDuringBoundaryRace
+// covers the other half of that same boundary race: if the caller's
+// own (outer) context is also already done by the time it's checked,
+// that takes precedence over the generic per-attempt timeout error.
+func TestRoundTripWithTimeout_OuterContextCancelledDuringBoundaryRace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		cancel()                           // the caller gives up independently of the per-attempt timer
+		time.Sleep(100 * time.Millisecond) // exceed the per-attempt timeout below
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("late"))}, nil
+	})
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	_, err := roundTripWithTimeout(rt, req, 20*time.Millisecond)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 

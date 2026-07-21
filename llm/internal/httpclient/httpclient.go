@@ -144,7 +144,17 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, header
 		req.Header.Set(k, v)
 	}
 
+	req, release := withHardCancel(req)
+
 	resp, err := client.Do(req)
+	// The watchdog only guards the request-body write, which is complete
+	// once Do returns (whether it succeeded or failed). Release it now,
+	// before reading the response body: the transport can return the
+	// connection to its idle pool as soon as that body reaches EOF, and
+	// a watchdog still holding a reference could then force-close a
+	// connection already reassigned to another request. Response reads
+	// are covered by ordinary context cancellation.
+	release()
 	if err != nil {
 		return 0, nil, fmt.Errorf("send request: %w", err)
 	}
@@ -185,7 +195,19 @@ func DoSSERequest(ctx context.Context, client *http.Client, method, url string, 
 		req.Header.Set(k, v)
 	}
 
-	return client.Do(req)
+	req, release := withHardCancel(req)
+	resp, err := client.Do(req)
+	// Release the watchdog as soon as Do returns: by then the response
+	// headers have arrived, so the request-body write it guards is
+	// complete. The caller reads the stream body afterwards, but those
+	// reads are covered by ordinary context cancellation; keeping the
+	// watchdog armed through the stream would risk force-closing a
+	// connection the transport has since returned to its pool.
+	release()
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // SSEScanner reads server-sent events from an io.Reader.

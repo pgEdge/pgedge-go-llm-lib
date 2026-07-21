@@ -12,6 +12,7 @@ project adheres to
 
 ### Fixed
 - `Options.WithDefaults()` no longer fills an unset `Temperature` with `0.7`. Previously this made it impossible for a caller to omit `temperature` from the wire: some models (e.g. newer Claude models) reject the field outright with `400: 'temperature' is deprecated for this model`. An unset `Temperature` (on both `Options` and `ChatRequest`) is now genuinely omitted; an explicitly-set value (including `0`) is unaffected
+- A request whose body is large enough to exceed OS socket buffers (e.g. a large `EmbedBatch` call), sent to a peer that never reads it, no longer leaves its connection open indefinitely after the caller's context expires. Context cancellation alone does not reliably interrupt a body write blocked at the OS level; the underlying connection is now force-closed in that case, for both the overall request context and `PerAttemptTimeout`
 
 ## [0.1.1] - 2026-07-16
 
