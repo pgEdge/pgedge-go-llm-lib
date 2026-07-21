@@ -256,15 +256,17 @@ func TestDoJSON_SmallRequestConnectionReusable(t *testing.T) {
 	})
 }
 
-// TestDoSSERequest_WrapsBodyForDeferredRelease verifies DoSSERequest's
-// specific wiring: unlike DoJSON (which reads the whole response
-// before returning, so it can release the watchdog via a plain
-// defer), DoSSERequest hands the caller a live stream that is read
-// long after this function returns. The watchdog must stay armed
-// until the caller closes the body, not until DoSSERequest itself
-// returns — otherwise a slow-to-start stream's connection would not
-// be protected by hard-cancel for the rest of its lifetime.
-func TestDoSSERequest_WrapsBodyForDeferredRelease(t *testing.T) {
+// TestDoSSERequest_ReleasesWatchdogAfterHeaders verifies DoSSERequest's
+// watchdog wiring: the watchdog exists only to unstick a blocked
+// request-body write, which is complete once the response headers
+// arrive, so DoSSERequest releases it as soon as client.Do returns
+// rather than holding a connection reference through the stream read.
+// Recreating a genuinely blocked write is inherently flaky, so this
+// exercises the observable contract instead: over a full stream
+// lifecycle the watchdog goroutine must not linger. It would fail if
+// the success path never released the watchdog (leaving its goroutine
+// blocked forever waiting on a context that is never cancelled).
+func TestDoSSERequest_ReleasesWatchdogAfterHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -275,7 +277,8 @@ func TestDoSSERequest_WrapsBodyForDeferredRelease(t *testing.T) {
 		}
 		io.WriteString(w, "data: hello\n\n")
 		fl.Flush()
-		<-r.Context().Done()
+		// Handler returns here, ending the stream so the body reaches
+		// EOF and the exchange completes cleanly.
 	}))
 	defer srv.Close()
 
@@ -283,25 +286,28 @@ func TestDoSSERequest_WrapsBodyForDeferredRelease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
 	resp, err := DoSSERequest(ctx, client, http.MethodGet, srv.URL, nil, nil)
 	if err != nil {
 		t.Fatalf("DoSSERequest failed: %v", err)
 	}
-
-	if _, ok := resp.Body.(*releaseOnCloseBody); !ok {
-		t.Fatalf("expected resp.Body to be wrapped in *releaseOnCloseBody so the watchdog outlives this function, got %T", resp.Body)
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("reading stream body: %v", err)
 	}
+	// Close twice: the body is now the transport's own, and Close on an
+	// io.ReadCloser is conventionally safe to call more than once.
+	_ = resp.Body.Close()
+	_ = resp.Body.Close()
 
-	closed := make(chan struct{})
-	go func() {
-		resp.Body.Close()
-		close(closed)
-	}()
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("resp.Body.Close() did not return within 1s")
-	}
+	// The watchdog goroutine must be gone once the exchange is done; it
+	// must not accumulate for the lifetime of the process.
+	client.CloseIdleConnections()
+	waitUntil(t, time.Second, func() bool {
+		runtime.GC()
+		return runtime.NumGoroutine() <= before
+	})
 }
 
 // TestDoSSERequest_ErrorDoesNotLeakWatchdog verifies that when the

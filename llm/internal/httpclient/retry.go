@@ -246,24 +246,28 @@ func roundTripWithTimeout(inner http.RoundTripper, req *http.Request, timeout ti
 		return nil, req.Context().Err()
 	}
 
-	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel, release: release}
+	// The round trip returned headers, so the body write the hard-cancel
+	// watchdog guards is complete: release it now rather than holding a
+	// connection reference through the (possibly long-lived, streaming)
+	// body read. The per-attempt context stays alive until the body is
+	// closed, so reads are still bounded by the caller's own context.
+	release()
+	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
 }
 
 // cancelBody wraps a response body so that closing it releases the
-// per-attempt context and its hard-cancel watchdog. context.CancelFunc
-// is safe to call more than once, so no additional guarding is needed.
+// per-attempt context. context.CancelFunc is safe to call more than
+// once, so no additional guarding is needed.
 type cancelBody struct {
 	io.ReadCloser
-	cancel  context.CancelFunc
-	release func()
+	cancel context.CancelFunc
 }
 
 // Close closes the underlying body and then releases the per-attempt
-// context and its hard-cancel watchdog.
+// context.
 func (b *cancelBody) Close() error {
 	err := b.ReadCloser.Close()
-	b.release()
 	b.cancel()
 	return err
 }

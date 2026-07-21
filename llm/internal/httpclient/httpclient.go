@@ -145,9 +145,16 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, header
 	}
 
 	req, release := withHardCancel(req)
-	defer release()
 
 	resp, err := client.Do(req)
+	// The watchdog only guards the request-body write, which is complete
+	// once Do returns (whether it succeeded or failed). Release it now,
+	// before reading the response body: the transport can return the
+	// connection to its idle pool as soon as that body reaches EOF, and
+	// a watchdog still holding a reference could then force-close a
+	// connection already reassigned to another request. Response reads
+	// are covered by ordinary context cancellation.
+	release()
 	if err != nil {
 		return 0, nil, fmt.Errorf("send request: %w", err)
 	}
@@ -190,29 +197,17 @@ func DoSSERequest(ctx context.Context, client *http.Client, method, url string, 
 
 	req, release := withHardCancel(req)
 	resp, err := client.Do(req)
+	// Release the watchdog as soon as Do returns: by then the response
+	// headers have arrived, so the request-body write it guards is
+	// complete. The caller reads the stream body afterwards, but those
+	// reads are covered by ordinary context cancellation; keeping the
+	// watchdog armed through the stream would risk force-closing a
+	// connection the transport has since returned to its pool.
+	release()
 	if err != nil {
-		release()
 		return nil, err
 	}
-	// The caller reads and closes resp.Body as the stream progresses,
-	// long after this function returns, so release only once that body
-	// is closed rather than immediately — otherwise the watchdog would
-	// stop watching before the stream (and its own context) is done.
-	resp.Body = &releaseOnCloseBody{ReadCloser: resp.Body, release: release}
 	return resp, nil
-}
-
-// releaseOnCloseBody wraps a response body so that closing it also
-// releases the hard-cancel watchdog set up in withHardCancel.
-type releaseOnCloseBody struct {
-	io.ReadCloser
-	release func()
-}
-
-func (b *releaseOnCloseBody) Close() error {
-	err := b.ReadCloser.Close()
-	b.release()
-	return err
 }
 
 // SSEScanner reads server-sent events from an io.Reader.

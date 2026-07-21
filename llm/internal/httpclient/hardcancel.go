@@ -66,11 +66,12 @@ func withHardCancel(req *http.Request) (*http.Request, func()) {
 	}
 	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
 
-	// release is exposed to callers via Close() on response-body
-	// wrappers (releaseOnCloseBody, cancelBody), and Close() is
-	// conventionally safe to call more than once — so release must be
-	// too. Without sync.Once, a second call would close an
-	// already-closed channel and panic the whole process.
+	// release must tolerate being called more than once: callers invoke
+	// it as soon as the round trip returns (the body write, the only
+	// thing this watchdog guards, is complete by then), and the retry
+	// path calls it on each of its own branches. sync.Once guarantees a
+	// second call is a harmless no-op rather than a panic from closing
+	// an already-closed channel.
 	done := make(chan struct{})
 	var once sync.Once
 	release := func() { once.Do(func() { close(done) }) }
