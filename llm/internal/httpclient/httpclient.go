@@ -144,6 +144,9 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, header
 		req.Header.Set(k, v)
 	}
 
+	req, release := withHardCancel(req)
+	defer release()
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("send request: %w", err)
@@ -185,7 +188,31 @@ func DoSSERequest(ctx context.Context, client *http.Client, method, url string, 
 		req.Header.Set(k, v)
 	}
 
-	return client.Do(req)
+	req, release := withHardCancel(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	// The caller reads and closes resp.Body as the stream progresses,
+	// long after this function returns, so release only once that body
+	// is closed rather than immediately — otherwise the watchdog would
+	// stop watching before the stream (and its own context) is done.
+	resp.Body = &releaseOnCloseBody{ReadCloser: resp.Body, release: release}
+	return resp, nil
+}
+
+// releaseOnCloseBody wraps a response body so that closing it also
+// releases the hard-cancel watchdog set up in withHardCancel.
+type releaseOnCloseBody struct {
+	io.ReadCloser
+	release func()
+}
+
+func (b *releaseOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.release()
+	return err
 }
 
 // SSEScanner reads server-sent events from an io.Reader.

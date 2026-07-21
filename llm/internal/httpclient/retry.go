@@ -206,7 +206,13 @@ func roundTripWithTimeout(inner http.RoundTripper, req *http.Request, timeout ti
 	ctx, cancel := context.WithCancel(req.Context())
 	timer := time.AfterFunc(timeout, cancel)
 
-	resp, err := inner.RoundTrip(req.WithContext(ctx))
+	// withHardCancel guards against a body write that blocks at the OS
+	// level (peer never reads it) and so never notices this attempt's
+	// own context expiring — without it, a stalled attempt would hang
+	// until the timer's cancel() call happens to unblock the write on
+	// its own, which it does not reliably do. See issue #22.
+	attemptReq, release := withHardCancel(req.WithContext(ctx))
+	resp, err := inner.RoundTrip(attemptReq)
 
 	// timer.Stop reports false iff the timer already fired — i.e. the
 	// per-attempt budget elapsed and cancel() ran. We only ever call
@@ -215,6 +221,7 @@ func roundTripWithTimeout(inner http.RoundTripper, req *http.Request, timeout ti
 
 	if err != nil {
 		cancel()
+		release()
 		// A per-attempt timeout surfaces as the caller's context being
 		// fine but our derived context being cancelled. Re-shape it as
 		// DeadlineExceeded so it is treated as a retryable timeout
@@ -232,28 +239,31 @@ func roundTripWithTimeout(inner http.RoundTripper, req *http.Request, timeout ti
 		// body so the connection is not leaked.
 		_ = resp.Body.Close()
 		cancel()
+		release()
 		if req.Context().Err() == nil {
 			return nil, fmt.Errorf("per-attempt timeout after %s: %w", timeout, context.DeadlineExceeded)
 		}
 		return nil, req.Context().Err()
 	}
 
-	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
+	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel, release: release}
 	return resp, nil
 }
 
 // cancelBody wraps a response body so that closing it releases the
-// per-attempt context. context.CancelFunc is safe to call more than
-// once, so no additional guarding is needed.
+// per-attempt context and its hard-cancel watchdog. context.CancelFunc
+// is safe to call more than once, so no additional guarding is needed.
 type cancelBody struct {
 	io.ReadCloser
-	cancel context.CancelFunc
+	cancel  context.CancelFunc
+	release func()
 }
 
 // Close closes the underlying body and then releases the per-attempt
-// context.
+// context and its hard-cancel watchdog.
 func (b *cancelBody) Close() error {
 	err := b.ReadCloser.Close()
+	b.release()
 	b.cancel()
 	return err
 }

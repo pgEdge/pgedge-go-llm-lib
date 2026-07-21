@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -678,6 +679,54 @@ func TestRetryTransportPerAttemptTimeoutDoesNotInterruptBody(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "second") {
 		t.Errorf("body truncated by per-attempt timeout: %q", body)
+	}
+}
+
+// blockingRoundTripper is a fake http.RoundTripper that fires GotConn
+// (as any real Transport would once it acquires a connection) and then
+// blocks until that exact connection is closed — never on its own, and
+// never by watching the request's context. This models a request body
+// write that is genuinely stuck at the OS level: a real blocked write
+// is not interrupted by context cancellation alone (see issue #22),
+// only by forcibly closing the underlying connection. Recreating the
+// actual OS-level buffer-filling condition in a test is inherently
+// flaky (it depends on platform-specific socket buffer sizes), so this
+// tests the hard-cancel mechanism itself, deterministically, instead.
+type blockingRoundTripper struct {
+	conn *fakeConn
+}
+
+func (rt *blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.GotConn != nil {
+		trace.GotConn(httptrace.GotConnInfo{Conn: rt.conn})
+	}
+	<-rt.conn.closedCh
+	return nil, errors.New("connection closed")
+}
+
+func TestRoundTripWithTimeout_HardCancelClosesBlockedWriteOnPerAttemptTimeout(t *testing.T) {
+	fc := newFakeConn()
+	rt := &blockingRoundTripper{conn: fc}
+
+	req, _ := http.NewRequest(http.MethodPost, "http://example.invalid", nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := roundTripWithTimeout(rt, req, 50*time.Millisecond)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("roundTripWithTimeout did not return within 2s; the per-attempt timeout did not hard-cancel the blocked write")
+	}
+
+	if !fc.isClosed() {
+		t.Error("expected the per-attempt hard-cancel to have closed the connection")
 	}
 }
 
