@@ -49,11 +49,32 @@ func withHardCancel(req *http.Request) (*http.Request, func()) {
 			mu.Lock()
 			conn = info.Conn
 			mu.Unlock()
+
+			// The transport can race delivering a connection against
+			// ctx being cancelled, with no ordering guarantee between
+			// the two. If ctx is already done by the time GotConn
+			// fires, the watchdog goroutine below may have already
+			// read conn as nil and given up watching — catch that
+			// narrow window here too, otherwise a connection could be
+			// captured with nobody left to force-close it.
+			select {
+			case <-ctx.Done():
+				_ = hardCloseConn(info.Conn)
+			default:
+			}
 		},
 	}
 	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
 
+	// release is exposed to callers via Close() on response-body
+	// wrappers (releaseOnCloseBody, cancelBody), and Close() is
+	// conventionally safe to call more than once — so release must be
+	// too. Without sync.Once, a second call would close an
+	// already-closed channel and panic the whole process.
 	done := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(done) }) }
+
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -67,7 +88,7 @@ func withHardCancel(req *http.Request) (*http.Request, func()) {
 		}
 	}()
 
-	return req, func() { close(done) }
+	return req, release
 }
 
 // hardCloseConn forces an abortive close (RST) rather than a graceful
@@ -77,11 +98,33 @@ func withHardCancel(req *http.Request) (*http.Request, func()) {
 // whole point of forcing the connection closed. SetLinger(0) tells the
 // kernel to discard unsent data and reset the connection immediately
 // instead.
+//
+// Multiplexed HTTP/2 connections are left alone entirely: many
+// concurrent requests can share one, so tearing it down to unstick a
+// single stalled one would take every other in-flight request down
+// with it — worse than the leak this guards against. That leak can
+// still occur over HTTP/2 (a stalled write blocked on the peer not
+// reading applies just as much to HTTP/2's own flow control as to raw
+// TCP), but a real per-stream fix needs direct http2.Transport
+// integration that isn't reachable through the public httptrace API,
+// so it's out of scope here.
 func hardCloseConn(conn net.Conn) error {
+	if isMultiplexed(conn) {
+		return nil
+	}
 	if tc, ok := underlyingTCPConn(conn); ok {
 		_ = tc.SetLinger(0)
 	}
 	return conn.Close()
+}
+
+// isMultiplexed reports whether conn is negotiated for HTTP/2, where
+// many concurrent requests can share one underlying connection. Go's
+// HTTP/2 support only ever runs over TLS (via ALPN), so a non-TLS conn
+// is never multiplexed this way.
+func isMultiplexed(conn net.Conn) bool {
+	tc, ok := conn.(*tls.Conn)
+	return ok && tc.ConnectionState().NegotiatedProtocol == "h2"
 }
 
 // underlyingTCPConn extracts the *net.TCPConn SetLinger lives on, if

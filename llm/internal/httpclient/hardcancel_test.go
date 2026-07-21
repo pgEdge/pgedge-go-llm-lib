@@ -133,6 +133,60 @@ func TestWithHardCancel_DoesNotCloseOnCleanRelease(t *testing.T) {
 	}
 }
 
+// TestWithHardCancel_ReleaseIsIdempotent verifies release() tolerates
+// being called more than once. It is invoked from Close() on two
+// response-body wrappers (releaseOnCloseBody, cancelBody), and Close()
+// on an io.ReadCloser is conventionally safe to call repeatedly (e.g.
+// an explicit early Close() plus a deferred one) — release must honour
+// that same convention rather than panicking on a second call.
+func TestWithHardCancel_ReleaseIsIdempotent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, release := withHardCancel(req)
+
+	release()
+	release() // must not panic
+}
+
+// TestWithHardCancel_GotConnAfterContextAlreadyDone covers the race
+// where the transport delivers a connection only after ctx is already
+// cancelled: Transport.getConn races connection delivery against
+// ctx.Done() with no ordering guarantee, so GotConn firing after
+// cancellation is a real, if narrow, possibility — not just this
+// test's artificial ordering. If GotConn didn't check for that itself,
+// the watchdog goroutine could already have observed ctx.Done() with
+// no connection captured yet and exited, leaving this connection
+// permanently unwatched.
+func TestWithHardCancel_GotConnAfterContextAlreadyDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrapped, release := withHardCancel(req)
+	defer release()
+	trace := gotConnTrace(t, wrapped)
+
+	cancel()
+	waitUntil(t, time.Second, func() bool { return ctx.Err() != nil })
+
+	// Give the watchdog goroutine a moment to observe ctx.Done() with
+	// no connection yet captured, and exit — simulating it having lost
+	// the race, before GotConn ever fires.
+	time.Sleep(50 * time.Millisecond)
+
+	fc := newFakeConn()
+	trace.GotConn(httptrace.GotConnInfo{Conn: fc})
+
+	waitUntil(t, time.Second, fc.isClosed)
+}
+
 // TestWithHardCancel_NilConnIsSafe verifies the watchdog doesn't panic
 // if the context expires before any connection was ever captured (e.g.
 // the request failed to even acquire a connection).
@@ -362,5 +416,101 @@ func TestUnderlyingTCPConn_NeitherIsSafe(t *testing.T) {
 	_, ok := underlyingTCPConn(fc)
 	if ok {
 		t.Error("expected ok=false for a connection type with no underlying *net.TCPConn")
+	}
+}
+
+// captureConn issues a real request through client to url and returns
+// whatever connection httptrace saw handle it, plus the response's
+// negotiated protocol major version, for tests that need a genuinely
+// negotiated (not merely constructed) TLS connection.
+func captureConn(t *testing.T, client *http.Client, url string) (net.Conn, *http.Response) {
+	t.Helper()
+	var conn net.Conn
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { conn = info.Conn },
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if conn == nil {
+		t.Fatal("GotConn never fired")
+	}
+	return conn, resp
+}
+
+// TestIsMultiplexed_HTTP2Connection is a regression test for the
+// HTTP/2 collateral-damage concern: many concurrent requests can share
+// one HTTP/2 connection, so hardCloseConn must recognise one and
+// refuse to force-close it — closing it to unstick a single stalled
+// request would take down every other request sharing it too.
+func TestIsMultiplexed_HTTP2Connection(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	srv.EnableHTTP2 = true // httptest defaults to HTTP/1.1-only otherwise
+	srv.StartTLS()
+	defer srv.Close()
+
+	conn, resp := captureConn(t, srv.Client(), srv.URL)
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("expected the test server to negotiate HTTP/2 with EnableHTTP2 set, got proto major %d", resp.ProtoMajor)
+	}
+
+	if !isMultiplexed(conn) {
+		t.Error("expected isMultiplexed to report true for a negotiated HTTP/2 connection")
+	}
+	if err := hardCloseConn(conn); err != nil {
+		t.Errorf("hardCloseConn on a multiplexed connection should be a no-op returning nil, got: %v", err)
+	}
+
+	// The real assertion: hardCloseConn returning nil isn't proof of
+	// anything by itself (closing a live connection "succeeds" either
+	// way). What matters is whether the connection actually survived —
+	// verified by reusing the same client for a second request and
+	// checking it rides the same underlying connection rather than
+	// having to establish a new one.
+	conn2, _ := captureConn(t, srv.Client(), srv.URL)
+	if conn2 != conn {
+		t.Error("hardCloseConn tore down the multiplexed connection instead of leaving it alone")
+	}
+}
+
+// TestIsMultiplexed_HTTP1TLSConnection confirms a plain HTTP/1.1-over-
+// TLS connection (not multiplexed, one request per connection) is not
+// mistaken for HTTP/2 — hardCloseConn must still be free to force-close
+// these, since that's the whole point of the fix.
+func TestIsMultiplexed_HTTP1TLSConnection(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	// Force HTTP/1.1 by disabling the client's HTTP/2 upgrade.
+	client.Transport.(*http.Transport).TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+
+	conn, resp := captureConn(t, client, srv.URL)
+	if resp.ProtoMajor != 1 {
+		t.Fatalf("expected HTTP/1.1 with TLSNextProto disabled, got proto major %d", resp.ProtoMajor)
+	}
+	if isMultiplexed(conn) {
+		t.Error("expected isMultiplexed to report false when HTTP/2 is disabled")
+	}
+}
+
+// TestIsMultiplexed_PlainTCPConn confirms a non-TLS connection (used
+// by tests and any http:// base URL, e.g. local model servers) is
+// never considered multiplexed — Go's HTTP/2 support only runs over
+// TLS.
+func TestIsMultiplexed_PlainTCPConn(t *testing.T) {
+	realConn := realTCPConnPair(t)
+	if isMultiplexed(realConn) {
+		t.Error("expected isMultiplexed to report false for a plain (non-TLS) connection")
 	}
 }
