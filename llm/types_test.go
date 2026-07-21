@@ -142,8 +142,8 @@ func TestOptionsDefaults(t *testing.T) {
 		Model:  "test-model",
 	}
 	resolved := opts.WithDefaults()
-	if resolved.Temperature == nil || *resolved.Temperature != 0.7 {
-		t.Errorf("expected default temperature 0.7, got %v", resolved.Temperature)
+	if resolved.Temperature != nil {
+		t.Errorf("expected Temperature to stay nil (omitted), got %v", *resolved.Temperature)
 	}
 	if resolved.MaxTokens == nil || *resolved.MaxTokens != 4096 {
 		t.Errorf("expected default max tokens 4096, got %v", resolved.MaxTokens)
@@ -179,13 +179,15 @@ func TestOptionsTemperatureZeroPreserved(t *testing.T) {
 	}
 }
 
-func TestOptionsTemperatureUnsetGetsDefault(t *testing.T) {
+// TestOptionsTemperatureUnsetStaysNil is a regression test: WithDefaults
+// used to fill an unset Temperature with 0.7, which made it impossible
+// for a caller to omit the field — some models (e.g. newer Claude
+// models) reject any temperature value outright. It must now stay nil
+// so providers omit it from the wire.
+func TestOptionsTemperatureUnsetStaysNil(t *testing.T) {
 	opts := Options{}.WithDefaults()
-	if opts.Temperature == nil {
-		t.Fatal("default Temperature should be non-nil")
-	}
-	if *opts.Temperature != 0.7 {
-		t.Errorf("Temperature = %v, want 0.7", *opts.Temperature)
+	if opts.Temperature != nil {
+		t.Errorf("Temperature = %v, want nil (omitted)", *opts.Temperature)
 	}
 }
 

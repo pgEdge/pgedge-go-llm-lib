@@ -1472,6 +1472,61 @@ func TestExplicitZeroTemperatureReachesWire(t *testing.T) {
 	}
 }
 
+// TestUnsetTemperatureOmittedFromWire is a regression test: Options
+// used to default Temperature to 0.7 when unset, which some models
+// reject outright. When neither Options nor ChatRequest set
+// Temperature, it must now be omitted from generationConfig entirely.
+func TestUnsetTemperatureOmittedFromWire(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []map[string]any{
+							{"text": "ok"},
+						},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":     1,
+				"candidatesTokenCount": 1,
+				"totalTokenCount":      2,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c, err := llm.NewClient(providerName, llm.Options{
+		APIKey:  "k",
+		BaseURL: srv.URL,
+		Model:   "gemini-2.0-flash",
+		Retry:   llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if genConfig, ok := captured["generationConfig"].(map[string]any); ok {
+		if temp, present := genConfig["temperature"]; present {
+			t.Errorf("temperature should be omitted from wire when unset, got %v", temp)
+		}
+	}
+}
+
 func TestBuildChatRequestMaxTokensAndTemp(t *testing.T) {
 	// Exercise the req.MaxTokens > 0 and req.Temperature != nil branches.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -377,9 +377,15 @@ type Options struct {
 	MaxTokens *int
 
 	// Temperature controls sampling randomness. Use llm.Float(t) to
-	// set; nil means "use the library default of 0.7" after
-	// WithDefaults runs. A pointer to 0 means deterministic sampling
-	// and is sent to the provider as `temperature: 0` on the wire.
+	// set; nil means omit the field entirely and let the provider use
+	// its own default — WithDefaults leaves it untouched. A pointer to
+	// 0 means deterministic sampling and is sent to the provider as
+	// `temperature: 0` on the wire.
+	//
+	// WithDefaults previously filled a nil Temperature with 0.7, which
+	// made it impossible for a caller to omit the field: some models
+	// (e.g. newer Claude models) reject any temperature value outright.
+	// Leaving it nil now genuinely omits it.
 	Temperature *float64
 
 	// RequestTimeout caps the wall-clock time of a single HTTP request,
@@ -429,17 +435,16 @@ type Options struct {
 
 // WithDefaults returns a copy of Options with default values applied
 // for any unset fields. Pointer fields are populated only when nil,
-// so explicit zero values (Temperature=0 for deterministic sampling,
-// MaxTokens=0 for "no client cap") are preserved.
+// so an explicit zero value (MaxTokens=0 for "no client cap") is
+// preserved. Temperature is deliberately NOT defaulted here — see its
+// field doc — so it stays nil (and is omitted from the wire) unless a
+// caller explicitly sets it, at either the Options or ChatRequest
+// level.
 func (o Options) WithDefaults() Options {
 	if o.APIKey == "" && o.APIKeyFile != "" {
 		if b, err := os.ReadFile(o.APIKeyFile); err == nil { //nolint:gosec // path is operator-supplied config
 			o.APIKey = strings.TrimSpace(string(b))
 		}
-	}
-	if o.Temperature == nil {
-		def := 0.7
-		o.Temperature = &def
 	}
 	if o.MaxTokens == nil {
 		def := 4096
