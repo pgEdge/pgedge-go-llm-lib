@@ -514,3 +514,38 @@ func TestIsMultiplexed_PlainTCPConn(t *testing.T) {
 		t.Error("expected isMultiplexed to report false for a plain (non-TLS) connection")
 	}
 }
+
+// TestWithHardCancel_ConcurrentGotConnAndCancelStress races GotConn
+// and the context's own cancel against each other directly (as
+// opposed to TestWithHardCancel_GotConnAfterContextAlreadyDone, which
+// fixes a deterministic ordering) to catch any data race the -race
+// detector can find in the interlock between them, across many
+// interleavings. Whichever "wins", the connection must always end up
+// closed.
+func TestWithHardCancel_ConcurrentGotConnAndCancelStress(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrapped, release := withHardCancel(req)
+		trace := gotConnTrace(t, wrapped)
+		fc := newFakeConn()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			cancel()
+		}()
+		go func() {
+			defer wg.Done()
+			trace.GotConn(httptrace.GotConnInfo{Conn: fc})
+		}()
+		wg.Wait()
+
+		waitUntil(t, time.Second, fc.isClosed)
+		release()
+	}
+}
