@@ -1403,7 +1403,7 @@ func TestMapError_400InvalidRequest(t *testing.T) {
 			"type":    "invalid_request_error",
 		},
 	})
-	err := mapError(400, body)
+	err := (&client{}).mapError(400, body)
 
 	if err == nil {
 		t.Fatal("expected error")
@@ -1433,7 +1433,7 @@ func TestMapError_500ProviderError(t *testing.T) {
 			"type":    "server_error",
 		},
 	})
-	err := mapError(500, body)
+	err := (&client{}).mapError(500, body)
 
 	if err == nil {
 		t.Fatal("expected error")
@@ -1451,7 +1451,7 @@ func TestMapError_500ProviderError(t *testing.T) {
 }
 
 func TestMapError_403Forbidden(t *testing.T) {
-	err := mapError(403, []byte(`{"error":{"message":"forbidden"}}`))
+	err := (&client{}).mapError(403, []byte(`{"error":{"message":"forbidden"}}`))
 
 	if !errors.Is(err, llm.ErrAuthentication) {
 		t.Errorf("expected ErrAuthentication for 403, got %v", err)
@@ -1460,7 +1460,7 @@ func TestMapError_403Forbidden(t *testing.T) {
 
 func TestMapError_EmptyBody(t *testing.T) {
 	// When body cannot be parsed, message falls back to "HTTP <status>".
-	err := mapError(503, []byte(""))
+	err := (&client{}).mapError(503, []byte(""))
 
 	if err == nil {
 		t.Fatal("expected error")

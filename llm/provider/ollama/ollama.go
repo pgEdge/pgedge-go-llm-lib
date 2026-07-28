@@ -22,6 +22,7 @@ import (
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
 )
 
 const (
@@ -913,11 +914,18 @@ type ollamaErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// mapError converts a non-2xx response into a *llm.ProviderError.
+//
+// Ollama runs locally and authenticates with no key, so there is no
+// configured secret to match against, but the message is still passed
+// through redaction: a proxy or gateway sitting in front of Ollama may
+// well quote a credential of its own back at us, and callers routinely
+// surface Error() to untrusted readers.
 func mapError(status int, body []byte) error {
 	var errResp ollamaErrorResponse
 	_ = json.Unmarshal(body, &errResp) // best-effort; fall back to status-based message below
 
-	msg := errResp.Error
+	msg := redact.Message(errResp.Error)
 	if msg == "" {
 		msg = fmt.Sprintf("HTTP %d", status)
 	}

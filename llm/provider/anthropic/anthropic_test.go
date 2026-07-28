@@ -1027,7 +1027,7 @@ func TestConvertMessage_RoleMapping(t *testing.T) {
 
 func TestMapError_InvalidRequest(t *testing.T) {
 	body := []byte(`{"error":{"message":"bad param","type":"invalid_request_error"}}`)
-	err := mapError(400, body)
+	err := (&client{}).mapError(400, body)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1048,7 +1048,7 @@ func TestMapError_InvalidRequest(t *testing.T) {
 
 func TestMapError_ProviderError(t *testing.T) {
 	body := []byte(`{"error":{"message":"internal server error","type":"server_error"}}`)
-	err := mapError(500, body)
+	err := (&client{}).mapError(500, body)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1069,7 +1069,7 @@ func TestMapError_ProviderError(t *testing.T) {
 
 func TestMapError_EmptyBody(t *testing.T) {
 	// When body is empty/unparseable, message falls back to "HTTP <status>"
-	err := mapError(503, []byte(``))
+	err := (&client{}).mapError(503, []byte(``))
 	if err == nil {
 		t.Fatal("expected error")
 	}

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
 )
 
 // flusher is the subset of http.Flusher we need. Mock-friendly.
@@ -39,7 +40,12 @@ type flusher interface {
 // an explicit ChunkDone its Usage is the zero value. The caller is
 // responsible for setting response headers (Content-Type,
 // Cache-Control) before calling.
-func writeSSE(w io.Writer, stream *llm.Stream) (*llm.ChatResponse, error) {
+//
+// Any secrets given are stripped from an error event before it reaches
+// the wire, alongside anything else credential-shaped; see
+// Proxy.redactError for why this layer exists even though provider
+// errors are already redacted at source.
+func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResponse, error) {
 	resp := &llm.ChatResponse{}
 	sawDone := false
 
@@ -105,7 +111,7 @@ func writeSSE(w io.Writer, stream *llm.Stream) (*llm.ChatResponse, error) {
 			return resp, nil
 		}
 		if err != nil {
-			payload, _ := json.Marshal(ErrorResponse{Error: err.Error()})
+			payload, _ := json.Marshal(ErrorResponse{Error: redact.Message(err.Error(), secrets...)})
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
 			flush()
 			flushText()

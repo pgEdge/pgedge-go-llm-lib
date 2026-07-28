@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
 )
 
 // Config configures a Proxy.
@@ -347,11 +348,43 @@ func (p *Proxy) Handler() http.Handler {
 }
 
 // writeError writes a JSON error response and invokes OnError if set.
+//
+// The error text is redacted on its way to the wire. Provider errors
+// arrive here already redacted at source, so this is a second layer for
+// them; what it catches first-hand is anything generated locally, most
+// notably an AuthError, whose message comes from a caller-supplied
+// Authorize hook and is a natural place for a client credential to end
+// up spliced into a string. OnError still receives the unmodified
+// ErrorInfo, since that hook is the operator's own server-side logging
+// and is not a trust boundary.
 func (p *Proxy) writeError(w http.ResponseWriter, r *http.Request, info ErrorInfo) {
 	if p.cfg.OnError != nil {
 		p.cfg.OnError(r, info)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(info.StatusCode)
-	_ = encodeJSON(w, ErrorResponse{Error: info.Err.Error()})
+	_ = encodeJSON(w, ErrorResponse{Error: p.redactError(info.Err)})
+}
+
+// redactError renders err with every configured provider credential,
+// and anything otherwise shaped like a credential, stripped out. A nil
+// error yields the empty string.
+func (p *Proxy) redactError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return redact.Message(err.Error(), p.secrets()...)
+}
+
+// secrets returns the API keys of every configured provider, for use
+// as redaction inputs. Providers configured without a key contribute
+// nothing.
+func (p *Proxy) secrets() []string {
+	out := make([]string, 0, len(p.cfg.Providers))
+	for _, opts := range p.cfg.Providers {
+		if opts.APIKey != "" {
+			out = append(out, opts.APIKey)
+		}
+	}
+	return out
 }

@@ -12,6 +12,7 @@ package voyage
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
 )
 
 const (
@@ -431,17 +433,54 @@ func (c *client) postJSON(ctx context.Context, path string, body, out any) error
 	}
 	status, respBody, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost, c.baseURL+path, headers, body, out)
 	if err != nil {
-		return &llm.ProviderError{Err: llm.ErrProviderError, Message: err.Error(), Provider: providerName, StatusCode: status}
+		return &llm.ProviderError{
+			Err:        llm.ErrProviderError,
+			Message:    redact.Message(err.Error(), c.apiKey),
+			Provider:   providerName,
+			StatusCode: status,
+		}
 	}
 	if status < 200 || status >= 300 {
 		return &llm.ProviderError{
 			Err:        statusToErr(status),
-			Message:    fmt.Sprintf("voyage: HTTP %d: %s", status, string(respBody)),
+			Message:    c.errorMessage(status, respBody),
 			Provider:   providerName,
 			StatusCode: status,
 		}
 	}
 	return nil
+}
+
+// voyageErrorResponse covers the two shapes Voyage uses for an error
+// body: a bare "detail" string, and the nested "error" object that
+// mirrors OpenAI's.
+type voyageErrorResponse struct {
+	Detail string `json:"detail"`
+	Error  struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// errorMessage builds the message for a non-2xx Voyage response.
+//
+// This deliberately does not fall back to quoting the raw response
+// body. A body we failed to parse is exactly the case where we cannot
+// reason about what it contains, and an authentication failure is
+// precisely when an upstream API is most likely to quote the submitted
+// credential back at us. Whatever text we do use is redacted, and the
+// unredacted body is never retained.
+func (c *client) errorMessage(status int, respBody []byte) string {
+	var errResp voyageErrorResponse
+	_ = json.Unmarshal(respBody, &errResp) // best-effort; fall back to the status below
+
+	detail := errResp.Detail
+	if detail == "" {
+		detail = errResp.Error.Message
+	}
+	if detail = redact.Message(detail, c.apiKey); detail == "" {
+		return fmt.Sprintf("voyage: HTTP %d", status)
+	}
+	return fmt.Sprintf("voyage: HTTP %d: %s", status, detail)
 }
 
 func statusToErr(status int) error {

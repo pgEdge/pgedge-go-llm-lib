@@ -1157,7 +1157,7 @@ func TestMapRole(t *testing.T) {
 func TestMapError(t *testing.T) {
 	t.Run("400 maps to ErrInvalidRequest", func(t *testing.T) {
 		body := []byte(`{"error":{"message":"bad request","status":"INVALID_ARGUMENT"}}`)
-		err := mapError(400, body)
+		err := (&client{}).mapError(400, body)
 		if !errors.Is(err, llm.ErrInvalidRequest) {
 			t.Errorf("expected ErrInvalidRequest, got %v", err)
 		}
@@ -1175,7 +1175,7 @@ func TestMapError(t *testing.T) {
 
 	t.Run("500 maps to ErrProviderError", func(t *testing.T) {
 		body := []byte(`{"error":{"message":"internal error","status":"INTERNAL"}}`)
-		err := mapError(500, body)
+		err := (&client{}).mapError(500, body)
 		if !errors.Is(err, llm.ErrProviderError) {
 			t.Errorf("expected ErrProviderError, got %v", err)
 		}
@@ -1189,7 +1189,7 @@ func TestMapError(t *testing.T) {
 	})
 
 	t.Run("empty body falls back to HTTP status message", func(t *testing.T) {
-		err := mapError(503, []byte(``))
+		err := (&client{}).mapError(503, []byte(``))
 		var pe *llm.ProviderError
 		if !errors.As(err, &pe) {
 			t.Fatal("expected ProviderError")
