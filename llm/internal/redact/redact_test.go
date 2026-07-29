@@ -166,6 +166,26 @@ func TestMessagePreservesInnocentText(t *testing.T) {
 	}
 }
 
+// TestMessageDoesNotMangleKebabCaseIdentifiers guards against the
+// shape patterns matching mid-word. Without a left boundary, "sk-"
+// inside "task-1234567890" or "disk-quota-exceeded" looks identical to
+// the start of an OpenAI key, and the patterns would eat half the word.
+func TestMessageDoesNotMangleKebabCaseIdentifiers(t *testing.T) {
+	cases := []string{
+		"task-1234567890 failed to process",
+		"disk-quota-exceeded on volume /dev/sda1",
+		"basement-1234567890abcd was the codename",
+	}
+
+	for _, msg := range cases {
+		t.Run(msg, func(t *testing.T) {
+			if got := Message(msg); got != msg {
+				t.Errorf("innocent kebab-case text was altered:\n want %q\n  got %q", msg, got)
+			}
+		})
+	}
+}
+
 func TestMessageIgnoresShortSecretsForFragmentMatching(t *testing.T) {
 	// A short junk key must not turn every occurrence of an ordinary
 	// word into a placeholder by fragment matching. It is still

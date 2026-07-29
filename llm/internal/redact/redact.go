@@ -74,12 +74,15 @@ var fragmentChars = regexp.MustCompile(`[A-Za-z0-9_-]+`)
 // partially starred echo is consumed as a single unit rather than
 // leaving unmatched fragments on either side.
 var keyShapePatterns = []*regexp.Regexp{
-	// OpenAI, including the sk-proj- and sk-ant- (Anthropic) forms.
-	regexp.MustCompile(`sk-[A-Za-z0-9_*.\x{2026}-]{8,}`),
+	// OpenAI, including the sk-proj- and sk-ant- (Anthropic) forms. The
+	// leading \b stops this matching inside an ordinary compound word
+	// or identifier such as "task-1234567890" or "disk-quota-exceeded",
+	// where "sk-" would otherwise appear mid-word.
+	regexp.MustCompile(`\bsk-[A-Za-z0-9_*.\x{2026}-]{8,}`),
 	// Google AI Studio / Gemini.
-	regexp.MustCompile(`AIza[A-Za-z0-9_*.\x{2026}-]{8,}`),
+	regexp.MustCompile(`\bAIza[A-Za-z0-9_*.\x{2026}-]{8,}`),
 	// Voyage AI.
-	regexp.MustCompile(`pa-[A-Za-z0-9_*.\x{2026}-]{20,}`),
+	regexp.MustCompile(`\bpa-[A-Za-z0-9_*.\x{2026}-]{20,}`),
 	// An HTTP Authorization value quoted into a message.
 	regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9+/=_*.\x{2026}-]{8,}`),
 	// A labelled credential, e.g. `api_key: hunter2` or

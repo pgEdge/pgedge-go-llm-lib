@@ -101,16 +101,22 @@ openai (401): Incorrect API key provided: [REDACTED]. You can
 find your API key at https://platform.openai.com/account/api-keys.
 ```
 
-Redaction always applies, and no option disables it. The
-library never retains the unredacted text, so no caller can
-log the credential by accident. The surrounding message
-survives intact, which keeps the error useful for diagnosis.
+Redaction always applies, and no option disables it. A
+provider's `ProviderError.Message` never retains the
+unredacted upstream text, so nothing your code reads off that
+field can leak a credential by accident. The surrounding
+message survives intact, which keeps the error useful for
+diagnosis.
 
-The proxy applies the same redaction to the JSON error
-responses and server-sent error events that it writes to HTTP
-clients. The `OnError` hook still receives the unmodified
-error, because that hook runs in your own process and serves
-your server-side logging.
+The proxy applies the same redaction on its way to the wire:
+the JSON error responses written by `writeError`, the
+server-sent `event: error` payloads, and the per-provider
+strings in the `GET /v1/health` response are all redacted.
+The one intentional exception is the `OnError` hook, which
+still receives the unmodified error — including, for an
+`AuthError` raised by your own `Authorize` hook, whatever text
+you put in it — because that hook runs in your own process
+for your own server-side logging and is not a trust boundary.
 
 Redaction operates on the text of an error message, and it
 cannot protect a credential that your own code places
