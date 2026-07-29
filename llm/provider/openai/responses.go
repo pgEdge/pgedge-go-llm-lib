@@ -364,7 +364,7 @@ func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest) (*llm.C
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, respBody)
+		return nil, c.mapError(status, respBody)
 	}
 
 	resp := parseResponsesResponse(&raw)
@@ -445,7 +445,7 @@ func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (
 		defer resp.Body.Close()
 		buf := make([]byte, 4096)
 		n, _ := resp.Body.Read(buf)
-		return nil, mapError(resp.StatusCode, buf[:n])
+		return nil, c.mapError(resp.StatusCode, buf[:n])
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)

@@ -308,7 +308,7 @@ func (p *Proxy) handleHealth(w http.ResponseWriter, r *http.Request) {
 	for name, opts := range p.cfg.Providers {
 		c, err := llm.NewClient(name, opts)
 		if err != nil {
-			out.Providers[name] = ProviderHealth{Status: "down", Error: err.Error()}
+			out.Providers[name] = ProviderHealth{Status: "down", Error: p.redactError(err)}
 			allOK = false
 			continue
 		}
@@ -318,7 +318,7 @@ func (p *Proxy) handleHealth(w http.ResponseWriter, r *http.Request) {
 		err = c.Ping(ctx)
 		cancel()
 		if err != nil {
-			out.Providers[name] = ProviderHealth{Status: "down", Error: err.Error()}
+			out.Providers[name] = ProviderHealth{Status: "down", Error: p.redactError(err)}
 			allOK = false
 		} else {
 			out.Providers[name] = ProviderHealth{Status: "ok"}
@@ -404,7 +404,7 @@ func (p *Proxy) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	streamResp, streamErr := writeSSE(w, stream)
+	streamResp, streamErr := writeSSE(w, stream, p.secrets()...)
 	dur := time.Since(start)
 
 	if p.cfg.OnResponse != nil {

@@ -70,6 +70,59 @@ The `Error()` method formats the error as
 The `Unwrap()` method returns the sentinel error so that
 `errors.Is` works correctly with the wrapped error.
 
+## Credential Redaction
+
+The library redacts credentials from every provider error
+message before storing the message on `ProviderError`. This
+matters because an upstream API commonly quotes part of the
+credential you submitted back in the body of an authentication
+failure; OpenAI, for example, includes a partially masked form
+of the submitted key in the message of a 401 response. A
+service that returns `err.Error()` to a caller would otherwise
+hand a fragment of the operator's API key to that caller.
+
+Redaction replaces each credential it finds with the literal
+string `[REDACTED]`. The library looks for:
+
+- the configured API key, wherever the key appears verbatim.
+- any fragment of the configured key long enough to identify
+  the key, which covers a provider that echoes a truncated or
+  partially masked form.
+- text matching a known credential format, including the
+  OpenAI, Anthropic, Google, and Voyage key prefixes, an HTTP
+  `Authorization` value, and a labelled value such as
+  `api_key=`.
+
+The following example shows a redacted authentication failure
+from the OpenAI provider:
+
+```text
+openai (401): Incorrect API key provided: [REDACTED]. You can
+find your API key at https://platform.openai.com/account/api-keys.
+```
+
+Redaction always applies, and no option disables it. A
+provider's `ProviderError.Message` never retains the
+unredacted upstream text, so nothing your code reads off that
+field can leak a credential by accident. The surrounding
+message survives intact, which keeps the error useful for
+diagnosis.
+
+The proxy applies the same redaction on its way to the wire:
+the JSON error responses written by `writeError`, the
+server-sent `event: error` payloads, and the per-provider
+strings in the `GET /v1/health` response are all redacted.
+The one intentional exception is the `OnError` hook, which
+still receives the unmodified error — including, for an
+`AuthError` raised by your own `Authorize` hook, whatever text
+you put in it — because that hook runs in your own process
+for your own server-side logging and is not a trust boundary.
+
+Redaction operates on the text of an error message, and it
+cannot protect a credential that your own code places
+somewhere else. Continue to keep keys out of log lines,
+request bodies, and base URLs.
+
 ## HTTP Status Code Mapping
 
 The Anthropic, OpenAI, and Gemini providers map HTTP status

@@ -20,6 +20,7 @@ import (
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
 )
 
 const (
@@ -264,7 +265,7 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, c.mapError(status, body)
 	}
 
 	resp := c.parseChatResponse(&aResp)
@@ -524,7 +525,7 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 		defer resp.Body.Close()
 		body := make([]byte, 4096)
 		n, _ := resp.Body.Read(body)
-		return nil, mapError(resp.StatusCode, body[:n])
+		return nil, c.mapError(resp.StatusCode, body[:n])
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)
@@ -728,7 +729,7 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, c.mapError(status, body)
 	}
 
 	var infos []llm.ModelInfo
@@ -772,11 +773,17 @@ type anthropicErrorResponse struct {
 	} `json:"error"`
 }
 
-func mapError(status int, body []byte) error {
+// mapError converts a non-2xx response into a *llm.ProviderError.
+//
+// The provider's own message is redacted before it is stored: an
+// upstream API may quote part of the submitted credential back in the
+// message on an authentication failure, and callers routinely surface
+// Error() to untrusted readers. The unredacted text is never retained.
+func (c *client) mapError(status int, body []byte) error {
 	var errResp anthropicErrorResponse
 	_ = json.Unmarshal(body, &errResp) // best-effort; fall back to status-based message below
 
-	msg := errResp.Error.Message
+	msg := redact.Message(errResp.Error.Message, c.apiKey)
 	if msg == "" {
 		msg = fmt.Sprintf("HTTP %d", status)
 	}

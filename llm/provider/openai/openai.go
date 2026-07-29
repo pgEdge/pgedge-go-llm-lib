@@ -21,6 +21,7 @@ import (
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
 )
 
 const (
@@ -269,7 +270,7 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, c.mapError(status, body)
 	}
 
 	resp := c.parseChatResponse(&oaiResp)
@@ -619,7 +620,7 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 		defer resp.Body.Close()
 		body := make([]byte, 4096)
 		n, _ := resp.Body.Read(body)
-		return nil, mapError(resp.StatusCode, body[:n])
+		return nil, c.mapError(resp.StatusCode, body[:n])
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)
@@ -762,7 +763,7 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, c.mapError(status, body)
 	}
 
 	if len(resp.Data) == 0 {
@@ -796,7 +797,7 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, c.mapError(status, body)
 	}
 
 	// Sort by index to maintain order.
@@ -910,7 +911,7 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, mapError(status, body)
+		return nil, c.mapError(status, body)
 	}
 
 	cfg := llm.ListModelsConfig{}
@@ -984,11 +985,18 @@ type openaiErrorResponse struct {
 	} `json:"error"`
 }
 
-func mapError(status int, body []byte) error {
+// mapError converts a non-2xx response into a *llm.ProviderError.
+//
+// The provider's own message is redacted before it is stored, because
+// OpenAI quotes a partially masked form of the submitted key back in
+// the message on an authentication failure, and callers routinely
+// surface Error() to untrusted readers. The unredacted text is never
+// retained.
+func (c *client) mapError(status int, body []byte) error {
 	var errResp openaiErrorResponse
 	_ = json.Unmarshal(body, &errResp) // best-effort; fall back to status-based message below
 
-	msg := errResp.Error.Message
+	msg := redact.Message(errResp.Error.Message, c.apiKey)
 	if msg == "" {
 		msg = fmt.Sprintf("HTTP %d", status)
 	}
