@@ -108,6 +108,19 @@ Gemini, the provider extracts the tool name from this ID. You
 should use the exact tool call ID from the `ToolUse` struct
 when constructing `ToolResult` messages.
 
+### Gemini Empty Message Content
+
+Gemini rejects a content part that carries no data, so the
+Gemini provider drops anything that would produce one. An
+empty text block is skipped, and a message whose blocks all
+yield nothing (an empty `Content` slice, an image or document
+with neither a URL nor inline data, or a nil `ToolUse`) is
+omitted from the request entirely. If that leaves nothing to
+send, `Chat` and `ChatStream` return a `ProviderError`
+wrapping `ErrInvalidRequest` before any HTTP call is made.
+You should check for empty content in your own message
+history if you see that error unexpectedly.
+
 ### Ollama Reasoning Models Wrapping JSON
 
 Reasoning models served by Ollama (for example `deepseek-r1`)

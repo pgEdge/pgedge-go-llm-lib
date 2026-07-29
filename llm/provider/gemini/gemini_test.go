@@ -10,6 +10,7 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2107,5 +2108,413 @@ func TestListModelsCapabilityFilterEmbeddings(t *testing.T) {
 		if !found {
 			t.Fatalf("model %s missing embeddings capability", info.ID)
 		}
+	}
+}
+
+// ---------- Empty-part regression tests (request path) ----------
+
+// chatSuccessBody is the canned generateContent response used by the
+// empty-part regression tests; the assertions there are all about the
+// request body, so the response only has to be well-formed.
+const chatSuccessBody = `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},` +
+	`"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,` +
+	`"candidatesTokenCount":1,"totalTokenCount":2}}`
+
+// newCapturingServer returns a test server that records the raw request
+// body of every call and replies with chatSuccessBody. The returned
+// pointer holds the most recent body.
+func newCapturingServer(t *testing.T) (*httptest.Server, *[]byte) {
+	t.Helper()
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading request body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(chatSuccessBody)); err != nil {
+			t.Errorf("writing response: %v", err)
+		}
+	}))
+	return srv, &captured
+}
+
+// wireContents extracts the contents array from a captured request body
+// as compacted JSON strings, one per content entry, so tests can assert
+// on exactly what went over the wire.
+func wireContents(t *testing.T, body []byte) []string {
+	t.Helper()
+	var wire struct {
+		Contents []json.RawMessage `json:"contents"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshalling captured body %s: %v", body, err)
+	}
+	out := make([]string, 0, len(wire.Contents))
+	for _, c := range wire.Contents {
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, c); err != nil {
+			t.Fatalf("compacting content %s: %v", c, err)
+		}
+		out = append(out, buf.String())
+	}
+	return out
+}
+
+// TestRequestNeverSendsEmptyPart is a regression test for
+// pgEdge/ai-dba-workbench#337. geminiPart.Text is tagged omitempty, so
+// a part carrying only an empty string marshals to {} and Gemini
+// rejects the whole request, complaining that parts[N].data, a
+// required oneof, has none of its fields set. No input may produce
+// such a part.
+func TestRequestNeverSendsEmptyPart(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []llm.Message
+		want     []string
+	}{
+		{
+			name: "empty text block is dropped",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "hello"},
+				}},
+				{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: ""},
+				}},
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "still there?"},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"hello"}]}`,
+				`{"role":"user","parts":[{"text":"still there?"}]}`,
+			},
+		},
+		{
+			name: "mixed empty and non-empty text sends only the non-empty part",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: ""},
+					{Type: llm.BlockText, Text: "real content"},
+					{Type: llm.BlockText, Text: ""},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"real content"}]}`,
+			},
+		},
+		{
+			name: "message with an empty content slice is dropped",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "hello"},
+				}},
+				{Role: llm.RoleAssistant, Content: []llm.ContentBlock{}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"hello"}]}`,
+			},
+		},
+		{
+			name: "image with neither URL nor data is dropped",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockImage, Image: &llm.ImageContent{MediaType: "image/png"}},
+				}},
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "describe it"},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"describe it"}]}`,
+			},
+		},
+		{
+			name: "document with neither URL nor data is dropped",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockDocument, Document: &llm.DocumentContent{MediaType: "application/pdf"}},
+				}},
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "summarise it"},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"summarise it"}]}`,
+			},
+		},
+		{
+			name: "nil tool use is dropped",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "go on"},
+				}},
+				{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+					{Type: llm.BlockToolUse, ToolUse: nil},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"go on"}]}`,
+			},
+		},
+		{
+			name: "assistant tool-use-only message still sends its functionCall",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "weather?"},
+				}},
+				{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+					{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{
+						ID:    "call-1",
+						Name:  "get_weather",
+						Input: json.RawMessage(`{"location":"London"}`),
+					}},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"weather?"}]}`,
+				`{"role":"model","parts":[{"functionCall":{"name":"get_weather",` +
+					`"args":{"location":"London"}}}]}`,
+			},
+		},
+		{
+			name: "empty assistant text alongside a tool use keeps only the call",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: "weather?"},
+				}},
+				{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: ""},
+					{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{
+						ID:    "call-1",
+						Name:  "get_weather",
+						Input: json.RawMessage(`{"location":"London"}`),
+					}},
+				}},
+			},
+			want: []string{
+				`{"role":"user","parts":[{"text":"weather?"}]}`,
+				`{"role":"model","parts":[{"functionCall":{"name":"get_weather",` +
+					`"args":{"location":"London"}}}]}`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, captured := newCapturingServer(t)
+			defer srv.Close()
+
+			c := newTestClient(t, srv.URL)
+			if _, err := c.Chat(context.Background(), llm.ChatRequest{
+				Messages: tt.messages,
+			}); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+
+			body := *captured
+			if strings.Contains(string(body), `{}`) {
+				t.Errorf("request body contains an empty part: %s", body)
+			}
+
+			got := wireContents(t, body)
+			if len(got) != len(tt.want) {
+				t.Fatalf("wire contents = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("contents[%d] = %s, want %s", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestEmptyContentsFailsClientSide checks that a request whose
+// every message is unrepresentable fails client-side with a clear
+// ErrInvalidRequest rather than sending an empty contents array and
+// collecting an opaque upstream 400. Both Chat and ChatStream must
+// refuse without issuing an HTTP call.
+func TestEmptyContentsFailsClientSide(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []llm.Message
+	}{
+		{
+			name:     "no messages at all",
+			messages: nil,
+		},
+		{
+			name: "single message with only empty text",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockText, Text: ""},
+				}},
+			},
+		},
+		{
+			name: "single message with an unusable image",
+			messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{
+					{Type: llm.BlockImage, Image: &llm.ImageContent{MediaType: "image/png"}},
+				}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var called bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.Header().Set("Content-Type", "application/json")
+				if _, err := w.Write([]byte(chatSuccessBody)); err != nil {
+					t.Errorf("writing response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, srv.URL)
+
+			_, err := c.Chat(context.Background(), llm.ChatRequest{
+				Messages:     tt.messages,
+				SystemPrompt: "you are helpful",
+			})
+			if err == nil {
+				t.Fatal("Chat: expected an error, got nil")
+			}
+			if !errors.Is(err, llm.ErrInvalidRequest) {
+				t.Errorf("Chat error = %v, want ErrInvalidRequest", err)
+			}
+
+			_, err = c.ChatStream(context.Background(), llm.ChatRequest{
+				Messages: tt.messages,
+			})
+			if err == nil {
+				t.Fatal("ChatStream: expected an error, got nil")
+			}
+			if !errors.Is(err, llm.ErrInvalidRequest) {
+				t.Errorf("ChatStream error = %v, want ErrInvalidRequest", err)
+			}
+
+			if called {
+				t.Error("no HTTP request should have been made")
+			}
+		})
+	}
+}
+
+// TestConvertMessageDropsUnrepresentableMessage covers convertMessage
+// directly: an unrepresentable message must yield no geminiContent at
+// all, never a placeholder part.
+func TestConvertMessageDropsUnrepresentableMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		message llm.Message
+	}{
+		{
+			name:    "nil content",
+			message: llm.Message{Role: llm.RoleUser},
+		},
+		{
+			name: "only empty text",
+			message: llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				{Type: llm.BlockText, Text: ""},
+			}},
+		},
+		{
+			name: "nil image",
+			message: llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{
+				{Type: llm.BlockImage, Image: nil},
+			}},
+		},
+		{
+			name: "unknown block type",
+			message: llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{
+				{Type: llm.ContentBlockType("something-new")},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := convertMessage(tt.message, map[string]string{}); len(got) != 0 {
+				t.Errorf("convertMessage = %+v, want no contents", got)
+			}
+		})
+	}
+}
+
+// TestResponseEmptyTextPartsFiltered guards the response path, which
+// already skipped empty text parts before the request-path fix and
+// must continue to do so.
+func TestResponseEmptyTextPartsFiltered(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"candidates":[{"content":{"role":"model",` +
+			`"parts":[{"text":""},{"text":"real"},{"text":""}]},"finishReason":"STOP"}],` +
+			`"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,` +
+			`"totalTokenCount":2}}`)); err != nil {
+			t.Errorf("writing response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{
+			{Type: llm.BlockText, Text: "hi"},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d: %+v", len(resp.Content), resp.Content)
+	}
+	if resp.Content[0].Text != "real" {
+		t.Errorf("text = %q, want %q", resp.Content[0].Text, "real")
+	}
+}
+
+// TestStreamEmptyTextPartsFiltered is the streaming counterpart of
+// TestResponseEmptyTextPartsFiltered.
+func TestStreamEmptyTextPartsFiltered(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunk := `{"candidates":[{"content":{"role":"model","parts":[{"text":""},` +
+			`{"text":"real"}]},"finishReason":"STOP"}],"usageMetadata":` +
+			`{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`
+		if _, err := w.Write([]byte("data: " + chunk + "\n\n")); err != nil {
+			t.Errorf("writing chunk: %v", err)
+		}
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{
+			{Type: llm.BlockText, Text: "hi"},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+
+	var texts []string
+	for chunk := range stream.Chunks {
+		if chunk.Type == llm.ChunkText {
+			texts = append(texts, chunk.Text)
+		}
+	}
+	if streamErr := <-stream.Err; streamErr != nil {
+		t.Fatalf("stream error: %v", streamErr)
+	}
+	if len(texts) != 1 || texts[0] != "real" {
+		t.Errorf("text chunks = %q, want [\"real\"]", texts)
 	}
 }
