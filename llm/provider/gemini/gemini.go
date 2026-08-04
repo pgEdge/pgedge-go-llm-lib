@@ -264,7 +264,10 @@ type geminiModelData struct {
 // ---------- Chat ----------
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	gReq := c.buildChatRequest(req)
+	gReq, err := c.buildChatRequest(req)
+	if err != nil {
+		return nil, err
+	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", c.baseURL, c.model)
 
@@ -283,9 +286,13 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	return resp, nil
 }
 
-func (c *client) buildChatRequest(req llm.ChatRequest) geminiRequest {
+func (c *client) buildChatRequest(req llm.ChatRequest) (geminiRequest, error) {
+	contents, err := c.convertMessages(req)
+	if err != nil {
+		return geminiRequest{}, err
+	}
 	gReq := geminiRequest{
-		Contents: c.convertMessages(req),
+		Contents: contents,
 	}
 
 	// System prompt via systemInstruction field: per-request only (no client-level default).
@@ -381,7 +388,7 @@ func (c *client) buildChatRequest(req llm.ChatRequest) geminiRequest {
 		gReq.ToolConfig = &geminiToolConfig{FunctionCallingConfig: cfg}
 	}
 
-	return gReq
+	return gReq, nil
 }
 
 // convertMessages walks the request messages and emits Gemini's
@@ -390,7 +397,13 @@ func (c *client) buildChatRequest(req llm.ChatRequest) geminiRequest {
 // emitted with the correct functionResponse.name (Gemini requires
 // the tool name on the response, but our llm.ContentBlock for a
 // tool result carries only ToolUseID).
-func (c *client) convertMessages(req llm.ChatRequest) []geminiContent {
+//
+// A message whose content yields no usable parts is dropped (see
+// convertMessage). If that leaves no contents at all, the request is
+// unsendable, so an error wrapping llm.ErrInvalidRequest is returned
+// rather than letting Gemini reject an empty contents array with an
+// opaque 400.
+func (c *client) convertMessages(req llm.ChatRequest) ([]geminiContent, error) {
 	contents := make([]geminiContent, 0, len(req.Messages))
 
 	// Maps tool-use ID -> tool name, populated as we traverse prior
@@ -401,7 +414,21 @@ func (c *client) convertMessages(req llm.ChatRequest) []geminiContent {
 	for _, m := range req.Messages {
 		contents = append(contents, convertMessage(m, toolNames)...)
 	}
-	return contents
+
+	if len(contents) == 0 {
+		msg := "no messages to send: the request carries no messages"
+		if len(req.Messages) > 0 {
+			msg = "no messages to send: every message had empty or " +
+				"unrepresentable content"
+		}
+		return nil, &llm.ProviderError{
+			Err:      llm.ErrInvalidRequest,
+			Message:  msg,
+			Provider: providerName,
+		}
+	}
+
+	return contents, nil
 }
 
 // convertMessage maps an llm.Message to one or more geminiContent
@@ -419,6 +446,16 @@ func convertMessage(m llm.Message, toolNames map[string]string) []geminiContent 
 	for _, b := range m.Content {
 		switch b.Type {
 		case llm.BlockText:
+			// An empty text block must never reach the wire.
+			// geminiPart.Text is tagged omitempty, so a part carrying
+			// only an empty string marshals to {} and Gemini rejects
+			// the whole request with a 400 complaining that
+			// contents[N].parts[M].data, a required oneof, has none
+			// of its fields set. Empty text carries no information,
+			// so drop it.
+			if b.Text == "" {
+				continue
+			}
 			parts = append(parts, geminiPart{Text: b.Text})
 
 		case llm.BlockImage:
@@ -488,10 +525,25 @@ func convertMessage(m llm.Message, toolNames map[string]string) []geminiContent 
 	}
 
 	if len(parts) == 0 {
-		// Gemini requires a non-empty parts array; emit an empty text
-		// part as a safe placeholder so we don't drop the message
-		// entirely.
-		parts = []geminiPart{{Text: ""}}
+		// The message yielded nothing representable: an empty Content
+		// slice, only empty text, an image or document with neither a
+		// URL nor inline data, or a nil ToolUse. Drop the message
+		// rather than emitting a placeholder part.
+		//
+		// This used to emit geminiPart{Text: ""} on the reasoning that
+		// a placeholder was safer than dropping the message, but that
+		// was wrong: Text is tagged omitempty, so the placeholder
+		// marshals to [{}] and Gemini rejects it, complaining that
+		// parts[0].data, a required oneof, has none of its fields
+		// set, which fails the entire request. A message
+		// with no representable content carries no information, so
+		// dropping it loses nothing, whereas the placeholder turned a
+		// harmless gap into a guaranteed 400. convertMessages simply
+		// appends our result, so returning an empty slice drops the
+		// message cleanly; convertMessages then guards against every
+		// message being dropped, which would leave an empty contents
+		// array.
+		return nil
 	}
 
 	return []geminiContent{{Role: role, Parts: parts}}
@@ -592,7 +644,10 @@ func normalizeStopReason(reason string) llm.StopReason {
 // ---------- ChatStream ----------
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
-	gReq := c.buildChatRequest(req)
+	gReq, err := c.buildChatRequest(req)
+	if err != nil {
+		return nil, err
+	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse",
 		c.baseURL, c.model)
