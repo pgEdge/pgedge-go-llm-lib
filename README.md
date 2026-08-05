@@ -97,7 +97,7 @@ import (
 | `CustomHeaders`  | `map[string]string` | Headers injected into every upstream request (tracing IDs, gateway tokens). |
 | `HTTPClient`     | `*http.Client`      | Bring your own HTTP client (mTLS, OpenTelemetry round-tripper, corporate proxy). |
 | `MaxTokens`      | `*int`              | Default response length cap. `nil` → library default of 4096. Use `llm.Int(n)`. |
-| `Temperature`    | `*float64`          | Default sampling temperature. `nil` → 0.7. Use `llm.Float(t)`. |
+| `Temperature`    | `*float64`          | Default sampling temperature. `nil` → omitted from the request, leaving the provider's own default. Use `llm.Float(t)`. |
 | `RequestTimeout` | `time.Duration`     | Wall-clock cap for a single HTTP attempt (0 → 120 s default). |
 | `Retry`          | `RetryConfig`       | Retry policy (see below). |
 | `OnRetry`        | `func(RetryEvent)`  | Observability hook fired before each retry sleep. |
@@ -105,6 +105,11 @@ import (
 **Precedence rule:** `Temperature` and `MaxTokens` on `ChatRequest` override the
 `Options` defaults for that request. A `nil` pointer on `ChatRequest` falls
 through to the `Options` value.
+
+Leaving `Temperature` unset in both places omits the field from the upstream
+request entirely, which matters because some newer models reject any
+temperature at all; an explicitly-set `0` is preserved and sent as
+`temperature: 0`.
 
 ### Retry
 

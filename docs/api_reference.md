@@ -122,7 +122,7 @@ type Options struct {
 | `CustomHeaders`  | —           | Headers injected into every request. |
 | `HTTPClient`     | library-built | Custom `*http.Client` (mTLS, round-trippers). |
 | `MaxTokens`      | `4096`      | Default response length cap. Use `llm.Int(n)`. |
-| `Temperature`    | `0.7`       | Default sampling temperature. Use `llm.Float(t)`. |
+| `Temperature`    | omitted     | Default sampling temperature. Unset means the field is left out of the upstream request, so the provider's own default applies; some newer models reject any temperature value. Use `llm.Float(t)`. |
 | `RequestTimeout` | `120s`      | Wall-clock cap per request, spanning all retries. |
 | `PerAttemptTimeout` | `0` (off) | Wall-clock cap per attempt; makes slow attempts retryable. Set below `RequestTimeout`. |
 | `Retry`          | 5 retries   | Retry policy. |

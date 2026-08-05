@@ -1208,6 +1208,144 @@ func TestChatStopSequences(t *testing.T) {
 	}
 }
 
+// TestExplicitZeroTemperatureReachesWire and
+// TestUnsetTemperatureOmittedFromWire are the Ollama counterparts of
+// the same-named tests in the anthropic, openai, and gemini packages
+// (added in 5cc62a3, "fix: stop WithDefaults from forcing an unset
+// Temperature to 0.7"). Ollama never actually read req.Temperature or
+// c.opts.Temperature at all, in buildChatRequest or anywhere else, so
+// a caller's Temperature was silently dropped regardless of whether it
+// was set -- unlike a genuinely-unsupported feature (Voyage's Chat, or
+// a PDF block here), which returns llm.ErrNotSupported rather than
+// silently ignoring the input.
+func TestExplicitZeroTemperatureReachesWire(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message":           map[string]any{"role": "assistant", "content": "ok"},
+			"done":              true,
+			"prompt_eval_count": 1,
+			"eval_count":        1,
+		})
+	}))
+	defer srv.Close()
+
+	c, err := llm.NewClient(providerName, llm.Options{
+		BaseURL: srv.URL, Model: "test", Retry: llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	zero := 0.0
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
+		Messages:    []llm.Message{llm.UserText("hi")},
+		Temperature: &zero,
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	opts, ok := captured["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options missing or wrong type: %+v", captured["options"])
+	}
+	temp, ok := opts["temperature"]
+	if !ok {
+		t.Fatalf("temperature missing from options: %+v", opts)
+	}
+	if tempF, ok := temp.(float64); !ok || tempF != 0.0 {
+		t.Errorf("options.temperature = %v (%T), want 0", temp, temp)
+	}
+}
+
+func TestUnsetTemperatureOmittedFromWire(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message":           map[string]any{"role": "assistant", "content": "ok"},
+			"done":              true,
+			"prompt_eval_count": 1,
+			"eval_count":        1,
+		})
+	}))
+	defer srv.Close()
+
+	c, err := llm.NewClient(providerName, llm.Options{
+		BaseURL: srv.URL, Model: "test", Retry: llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if opts, ok := captured["options"].(map[string]any); ok {
+		if temp, present := opts["temperature"]; present {
+			t.Errorf("temperature should be omitted from wire when unset, got %v", temp)
+		}
+	}
+}
+
+// TestClientDefaultTemperatureAppliesWhenRequestOmitsIt proves the
+// third tier of the per-request -> client-default -> omit fallback:
+// a client-level Options.Temperature takes effect when the individual
+// ChatRequest leaves Temperature nil.
+func TestClientDefaultTemperatureAppliesWhenRequestOmitsIt(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message":           map[string]any{"role": "assistant", "content": "ok"},
+			"done":              true,
+			"prompt_eval_count": 1,
+			"eval_count":        1,
+		})
+	}))
+	defer srv.Close()
+
+	clientTemp := 0.3
+	c, err := llm.NewClient(providerName, llm.Options{
+		BaseURL: srv.URL, Model: "test", Retry: llm.RetryConfig{Disabled: true},
+		Temperature: &clientTemp,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	opts, ok := captured["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options missing or wrong type: %+v", captured["options"])
+	}
+	temp, ok := opts["temperature"]
+	if !ok {
+		t.Fatalf("temperature missing from options: %+v", opts)
+	}
+	if tempF, ok := temp.(float64); !ok || tempF != 0.3 {
+		t.Errorf("options.temperature = %v (%T), want 0.3", temp, temp)
+	}
+}
+
 func TestStripThinkTags(t *testing.T) {
 	cases := []struct {
 		name string

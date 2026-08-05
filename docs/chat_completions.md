@@ -158,10 +158,18 @@ A `nil` pointer on `ChatRequest` falls through to the `Options`
 default. The following table describes the library defaults
 when no value is specified:
 
-| Option      | Default |
-|-------------|---------|
-| Temperature | 0.7     |
-| MaxTokens   | 4096    |
+| Option      | Default  |
+|-------------|----------|
+| Temperature | omitted  |
+| MaxTokens   | 4096     |
+
+The library does not supply a temperature of its own. When
+`Temperature` is unset on both `ChatRequest` and `Options`, the
+field is left out of the upstream request altogether and the
+provider applies whatever default it prefers, which is what
+allows the library to talk to models that reject a temperature
+outright. An explicitly-set `0` is not treated as unset: it is
+preserved and sent as `temperature: 0`.
 
 ## Response Format (JSON Mode)
 
