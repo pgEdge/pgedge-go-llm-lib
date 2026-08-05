@@ -232,6 +232,25 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) (ollamaChatR
 		ollamaReq.Options["stop"] = req.StopSequences
 	}
 
+	// Temperature: per-request → client default → omit (use Ollama's own
+	// default). Previously never read here at all, so a caller's
+	// Temperature was silently dropped regardless of whether it was set;
+	// unlike a provider that genuinely lacks a feature (e.g. Voyage's
+	// Chat, or a PDF block here), that gave no error and no signal that
+	// the value had no effect.
+	var temp *float64
+	if req.Temperature != nil {
+		temp = req.Temperature
+	} else {
+		temp = c.opts.Temperature
+	}
+	if temp != nil {
+		if ollamaReq.Options == nil {
+			ollamaReq.Options = make(map[string]any)
+		}
+		ollamaReq.Options["temperature"] = *temp
+	}
+
 	return ollamaReq, nil
 }
 

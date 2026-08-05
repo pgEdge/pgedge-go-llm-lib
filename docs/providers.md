@@ -161,6 +161,9 @@ The Ollama provider supports the following features:
   schema object directly (Ollama 0.5.0 or later).
 - cumulative token usage tracking populated from Ollama's
   `prompt_eval_count` and `eval_count` fields.
+- `Temperature`, set per-request, as a client-level default on
+  `Options`, or left unset entirely to use Ollama's own default.
+  Sent in the request's `options.temperature` field.
 
 The Ollama provider does not require an API key because Ollama
 runs locally.
