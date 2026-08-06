@@ -13,3 +13,7 @@ coverage.html
 .vscode/
 .idea/
 .DS_Store
+
+# MkDocs build output (repository root only, so a nested directory named
+# "site" is still tracked).
+/site/

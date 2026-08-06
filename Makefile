@@ -12,8 +12,10 @@ GO ?= go
 
 # golangci-lint binary. The Makefile prefers a pinned version installed
 # under $(GOBIN) but falls back to whatever is on $PATH.
+# Must stay on the v2 module path: .golangci.yml is `version: "2"` format,
+# which the v1 binary cannot read. CI installs this same pin.
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null)
-GOLANGCI_LINT_VERSION ?= v1.62.2
+GOLANGCI_LINT_VERSION ?= v2.12.2
 
 PKGS := ./...
 
@@ -71,7 +73,7 @@ lint: fmt-check vet
 
 .PHONY: lint-install
 lint-install:
-	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: tidy
 tidy:
