@@ -7,7 +7,7 @@ make your first API call.
 
 pgEdge Go LLM Library requires the following software:
 
-- Go 1.26 or later.
+- Go 1.25 or later.
 
 ## Installation
 

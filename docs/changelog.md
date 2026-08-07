@@ -8,6 +8,11 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- The minimum supported Go version is now 1.25.0, lowered from 1.26.1. The `go` directive in a library's `go.mod` is a floor imposed on everyone who imports it rather than a statement about what the library itself links, so requiring the newest release excluded consumers pinned to the previous major in exchange for nothing: no language feature newer than 1.20 is used anywhere here, and there are no module requirements to drag the floor upwards. 1.25 is also the oldest release still receiving upstream security fixes, so every supported Go now works, and consumers already on a newer toolchain are unaffected because the directive sets a minimum rather than a maximum. CI builds and tests at 1.25.x alongside 1.26.x, since the directive constrains language features but not standard library APIs, and a floor that is never built at is advertised rather than guaranteed
+
 ## [0.2.0] - 2026-08-06
 
 ### Security
