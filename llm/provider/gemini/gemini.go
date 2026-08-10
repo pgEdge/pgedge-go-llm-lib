@@ -667,13 +667,19 @@ func (c *client) parseChatResponse(gResp *geminiResponse) *llm.ChatResponse {
 		}
 	}
 
-	// Gemini has no distinct finish reason for a function call; it
-	// always reports "STOP", so normalizeStopReason above can only
-	// ever return the generic end-turn value here. Override it when
-	// the response actually carries a tool call, the same way Ollama
-	// and OpenAI derive StopReasonToolUse from content when their own
-	// APIs don't signal it directly.
-	if resp.StopReason == llm.StopReasonEndTurn {
+	// Gemini reports "STOP" for an ordinary function call — it has no
+	// distinct finish reason for one — so normalizeStopReason above
+	// produces only the generic end-turn value here and a caller
+	// checking StopReasonToolUse never sees it. Gate the override
+	// strictly on the raw "STOP" finish reason rather than on
+	// resp.StopReason: Gemini has genuine, documented finish reasons
+	// for a tool call gone wrong (MALFORMED_FUNCTION_CALL,
+	// UNEXPECTED_TOOL_CALL), and normalizeStopReason's default case
+	// maps those — and any other value it doesn't recognise — to the
+	// same generic end-turn value, so checking resp.StopReason would
+	// promote those to tool_use too and encourage a caller to execute
+	// a call Gemini has already flagged as broken.
+	if candidate.FinishReason == "STOP" {
 		for _, block := range resp.Content {
 			if block.Type == llm.BlockToolUse {
 				resp.StopReason = llm.StopReasonToolUse
