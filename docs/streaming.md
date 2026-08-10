@@ -125,8 +125,9 @@ fmt.Println(fullResponse.String())
 When the model makes a tool call during streaming, the stream
 emits a `llm.ChunkToolUseStart` chunk followed by one or more
 `llm.ChunkToolUseDelta` chunks. The start chunk contains the
-tool name and ID in a `*llm.ToolUse` value. Each delta chunk
-carries a partial JSON argument fragment in `chunk.Partial`
+tool name, the ID, and any provider `Signature` in a
+`*llm.ToolUse` value. Each delta chunk carries a partial JSON
+argument fragment in `chunk.Partial`
 (not `chunk.Text`). Concatenating all `Partial` values gives
 you the complete `json.RawMessage` for `ToolUse.Input`.
 
@@ -148,22 +149,32 @@ for {
 
     switch chunk.Type {
     case llm.ChunkToolUseStart:
-        currentTool = chunk.ToolUse // *llm.ToolUse{ID, Name, Input}
+        // *llm.ToolUse{ID, Name, Input, Signature}
+        currentTool = chunk.ToolUse
         toolArgs.Reset()
+        // A provider may deliver complete arguments up front.
+        toolArgs.Write(currentTool.Input)
     case llm.ChunkToolUseDelta:
         toolArgs.WriteString(chunk.Partial) // partial JSON fragment
     case llm.ChunkDone:
         if currentTool != nil {
             // toolArgs.String() is the complete JSON arguments
-            input := json.RawMessage(toolArgs.String())
-            result := executeTool(currentTool.Name, input)
+            currentTool.Input = json.RawMessage(toolArgs.String())
+            result := executeTool(
+                currentTool.Name, currentTool.Input,
+            )
 
-            // Send the result back
+            // Replay the model's own tool call, then the result.
             followUp, _ := client.Chat(ctx, llm.ChatRequest{
                 Messages: []llm.Message{
                     llm.UserText("original question"),
-                    // include prior assistant turn here
-                    llm.ToolResultMessage(currentTool.ID, result, false),
+                    llm.AssistantBlocks(llm.ContentBlock{
+                        Type:    llm.BlockToolUse,
+                        ToolUse: currentTool,
+                    }),
+                    llm.ToolResultMessage(
+                        currentTool.ID, result, false,
+                    ),
                 },
             })
             _ = followUp
@@ -172,9 +183,14 @@ for {
 }
 ```
 
+The assistant turn must carry the `*llm.ToolUse` value that the
+stream delivered, as shown above. Building a replacement from the
+name and arguments alone discards `Signature`, and Gemini's
+thinking models then reject the follow-up request outright.
+
 Alternatively, use `stream.Collect` which handles this buffering
 automatically and returns a `*ChatResponse` with complete
-`BlockToolUse` content blocks.
+`BlockToolUse` content blocks, `Signature` included.
 
 ## Token Usage in Streams
 

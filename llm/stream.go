@@ -179,7 +179,7 @@ func (s *Stream) Collect(ctx context.Context) (*ChatResponse, error) {
 						flushText()
 						flushTool()
 						if c.ToolUse != nil {
-							currentTool = &ToolUse{ID: c.ToolUse.ID, Name: c.ToolUse.Name, Input: c.ToolUse.Input}
+							currentTool = &ToolUse{ID: c.ToolUse.ID, Name: c.ToolUse.Name, Input: c.ToolUse.Input, Signature: c.ToolUse.Signature}
 							if len(currentTool.Input) > 0 {
 								toolBuf.Write(currentTool.Input)
 							}
@@ -209,7 +209,7 @@ func (s *Stream) Collect(ctx context.Context) (*ChatResponse, error) {
 			flushText()
 			flushTool()
 			if chunk.ToolUse != nil {
-				currentTool = &ToolUse{ID: chunk.ToolUse.ID, Name: chunk.ToolUse.Name, Input: chunk.ToolUse.Input}
+				currentTool = &ToolUse{ID: chunk.ToolUse.ID, Name: chunk.ToolUse.Name, Input: chunk.ToolUse.Input, Signature: chunk.ToolUse.Signature}
 				if len(currentTool.Input) > 0 {
 					toolBuf.Write(currentTool.Input)
 				}

@@ -71,6 +71,17 @@ The `ToolUse` struct contains the following fields:
 - `Name` is the name of the tool the model wants to call.
 - `Input` is a `json.RawMessage` containing the tool
   arguments as JSON.
+- `Signature` is an opaque provider token that must be sent
+  back unchanged on later turns, and is empty for providers
+  that do not use one.
+
+Gemini's thinking models populate `Signature` and refuse any
+request that replays one of their tool calls without the value,
+so keep the assistant message intact when you append a tool
+result. Passing `resp.Content` straight to
+`llm.AssistantBlocks`, as the examples below do, preserves the
+field; constructing a fresh `ToolUse` from the name and
+arguments alone discards the value and breaks the next turn.
 
 ## Executing Tools and Sending Results
 
@@ -213,7 +224,8 @@ other than Anthropic ignore the extension.
 
 Tool calls also work with streaming responses. The stream
 emits a `llm.ChunkToolUseStart` chunk (with `*ToolUse`
-containing `ID` and `Name`) followed by `llm.ChunkToolUseDelta`
+containing `ID`, `Name`, and any provider `Signature`)
+followed by `llm.ChunkToolUseDelta`
 chunks carrying partial `json.RawMessage` fragments in
 `chunk.Partial`. Concatenate the fragments to reconstruct the
 full `Input`.

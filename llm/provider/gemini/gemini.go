@@ -143,6 +143,17 @@ type geminiPart struct {
 	FileData         *geminiFileData         `json:"fileData,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+
+	// ThoughtSignature is an opaque token that Gemini's thinking
+	// models attach to the part carrying a function call, so they can
+	// resume their own reasoning on the following turn. It must be
+	// echoed back verbatim, on the same part, whenever that function
+	// call is replayed as conversation history; a Gemini 3 series
+	// model refuses the whole request with a 400 rather than merely
+	// degrading if it is missing. Where a response contains parallel
+	// function calls only the first part carries a signature, so an
+	// empty value on later parts is expected and not an error.
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
 // geminiInlineData carries inline base64-encoded media. Data is
@@ -511,6 +522,10 @@ func convertMessage(m llm.Message, toolNames map[string]string) []geminiContent 
 					Name: b.ToolUse.Name,
 					Args: args,
 				},
+				// Echo back the thought signature captured when the
+				// model made this call; without it a thinking model
+				// rejects the request outright.
+				ThoughtSignature: b.ToolUse.Signature,
 			})
 			// Remember (ID -> Name) for any later tool-result lookup.
 			if b.ToolUse.ID != "" {
@@ -643,9 +658,10 @@ func (c *client) parseChatResponse(gResp *geminiResponse) *llm.ChatResponse {
 			resp.Content = append(resp.Content, llm.ContentBlock{
 				Type: llm.BlockToolUse,
 				ToolUse: &llm.ToolUse{
-					ID:    fmt.Sprintf("gemini-tool-%s", part.FunctionCall.Name),
-					Name:  part.FunctionCall.Name,
-					Input: json.RawMessage(argsJSON),
+					ID:        fmt.Sprintf("gemini-tool-%s", part.FunctionCall.Name),
+					Name:      part.FunctionCall.Name,
+					Input:     json.RawMessage(argsJSON),
+					Signature: part.ThoughtSignature,
 				},
 			})
 		}
@@ -736,9 +752,10 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 					chunks <- llm.StreamChunk{
 						Type: llm.ChunkToolUseStart,
 						ToolUse: &llm.ToolUse{
-							ID:    fmt.Sprintf("gemini-tool-%s", part.FunctionCall.Name),
-							Name:  part.FunctionCall.Name,
-							Input: json.RawMessage(argsJSON),
+							ID:        fmt.Sprintf("gemini-tool-%s", part.FunctionCall.Name),
+							Name:      part.FunctionCall.Name,
+							Input:     json.RawMessage(argsJSON),
+							Signature: part.ThoughtSignature,
 						},
 					}
 				}

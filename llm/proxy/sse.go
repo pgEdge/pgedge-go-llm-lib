@@ -85,7 +85,7 @@ func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResp
 			flushText()
 			flushTool()
 			if chunk.ToolUse != nil {
-				currentTool = &llm.ToolUse{ID: chunk.ToolUse.ID, Name: chunk.ToolUse.Name, Input: chunk.ToolUse.Input}
+				currentTool = &llm.ToolUse{ID: chunk.ToolUse.ID, Name: chunk.ToolUse.Name, Input: chunk.ToolUse.Input, Signature: chunk.ToolUse.Signature}
 				if len(currentTool.Input) > 0 {
 					toolBuf.Write(currentTool.Input)
 				}
