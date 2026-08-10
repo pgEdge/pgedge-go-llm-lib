@@ -100,6 +100,19 @@ type ToolUse struct {
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
+
+	// Signature is an opaque, provider-specific token that some
+	// providers attach to a tool call and then require to be sent
+	// back, unchanged, on any later request that replays the call as
+	// conversation history. Gemini's thinking models use it to resume
+	// their own reasoning across turns, and reject a request whose
+	// history omits it; other providers currently ignore the field.
+	//
+	// Callers should treat this as opaque and simply keep assistant
+	// messages intact when appending a tool result, which is what the
+	// ordinary tool-calling loop does anyway. Never synthesise or
+	// modify a value here.
+	Signature string `json:"signature,omitempty"`
 }
 
 // Tool defines a tool/function available for the LLM to call.

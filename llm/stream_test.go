@@ -282,6 +282,34 @@ func TestStreamCollect(t *testing.T) {
 	}
 }
 
+func TestStreamCollectPreservesToolUseSignature(t *testing.T) {
+	// Collect rebuilds the tool-use block field by field, so the
+	// opaque provider signature has to be carried across explicitly;
+	// dropping it here would break Gemini's next turn just as surely
+	// as never capturing it at all.
+	chunks := make(chan StreamChunk, 3)
+	errCh := make(chan error, 1)
+	chunks <- StreamChunk{Type: ChunkToolUseStart, ToolUse: &ToolUse{
+		ID: "tu_1", Name: "search", Signature: "signature-A",
+	}}
+	chunks <- StreamChunk{Type: ChunkToolUseDelta, Partial: `{"q":"hi"}`}
+	chunks <- StreamChunk{Type: ChunkDone, Usage: &TokenUsage{TotalTokens: 5}}
+	close(chunks)
+	close(errCh)
+
+	s := &Stream{Chunks: chunks, Err: errCh}
+	resp, err := s.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].ToolUse == nil {
+		t.Fatalf("expected one tool_use block, got %+v", resp.Content)
+	}
+	if got := resp.Content[0].ToolUse.Signature; got != "signature-A" {
+		t.Errorf("Signature = %q, want signature-A", got)
+	}
+}
+
 func TestStreamCollectEmptyStream(t *testing.T) {
 	chunks := make(chan StreamChunk)
 	errCh := make(chan error)

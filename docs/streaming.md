@@ -125,7 +125,8 @@ fmt.Println(fullResponse.String())
 When the model makes a tool call during streaming, the stream
 emits a `llm.ChunkToolUseStart` chunk followed by one or more
 `llm.ChunkToolUseDelta` chunks. The start chunk contains the
-tool name and ID in a `*llm.ToolUse` value. Each delta chunk
+tool name, the ID, and any provider `Signature` in a
+`*llm.ToolUse` value. Each delta chunk
 carries a partial JSON argument fragment in `chunk.Partial`
 (not `chunk.Text`). Concatenating all `Partial` values gives
 you the complete `json.RawMessage` for `ToolUse.Input`.

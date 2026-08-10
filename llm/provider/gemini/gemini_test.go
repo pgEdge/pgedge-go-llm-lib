@@ -2634,3 +2634,246 @@ func TestStreamEmptyTextPartsFiltered(t *testing.T) {
 		t.Errorf("text chunks = %q, want [\"real\"]", texts)
 	}
 }
+
+func TestChatCapturesThoughtSignature(t *testing.T) {
+	// Gemini's thinking models attach a thoughtSignature to the part
+	// carrying a function call, and reject any later request that
+	// replays that call without it, so the value has to survive into
+	// the ToolUse block callers keep in their history.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []map[string]any{
+							{
+								"functionCall": map[string]any{
+									"name": "get_weather",
+									"args": map[string]any{"location": "NYC"},
+								},
+								"thoughtSignature": "signature-A",
+							},
+						},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":     5,
+				"candidatesTokenCount": 3,
+				"totalTokenCount":      8,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Weather?"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].ToolUse == nil {
+		t.Fatalf("expected one tool_use block, got %+v", resp.Content)
+	}
+	if got := resp.Content[0].ToolUse.Signature; got != "signature-A" {
+		t.Errorf("Signature = %q, want signature-A", got)
+	}
+}
+
+func TestChatParallelFunctionCallsCaptureFirstSignatureOnly(t *testing.T) {
+	// Where a response holds parallel function calls only the first
+	// part carries a signature, so an empty value on the rest is
+	// expected rather than a failure to capture.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []map[string]any{
+							{
+								"functionCall":     map[string]any{"name": "first", "args": map[string]any{}},
+								"thoughtSignature": "signature-A",
+							},
+							{
+								"functionCall": map[string]any{"name": "second", "args": map[string]any{}},
+							},
+						},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{"totalTokenCount": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "go"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(resp.Content))
+	}
+	if got := resp.Content[0].ToolUse.Signature; got != "signature-A" {
+		t.Errorf("first Signature = %q, want signature-A", got)
+	}
+	if got := resp.Content[1].ToolUse.Signature; got != "" {
+		t.Errorf("second Signature = %q, want empty", got)
+	}
+}
+
+func TestChatStreamCapturesThoughtSignature(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher := w.(http.Flusher)
+
+		chunk := `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"location":"NYC"}},"thoughtSignature":"signature-A"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3,"totalTokenCount":8}}`
+		w.Write([]byte("data: " + chunk + "\n\n"))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Weather?"}}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var gotSignature string
+	var sawToolUse bool
+	for chunk := range stream.Chunks {
+		if chunk.Type == llm.ChunkToolUseStart && chunk.ToolUse != nil {
+			sawToolUse = true
+			gotSignature = chunk.ToolUse.Signature
+		}
+	}
+	if streamErr := <-stream.Err; streamErr != nil {
+		t.Fatalf("unexpected stream error: %v", streamErr)
+	}
+	if !sawToolUse {
+		t.Fatal("expected tool_use_start chunk")
+	}
+	if gotSignature != "signature-A" {
+		t.Errorf("Signature = %q, want signature-A", gotSignature)
+	}
+}
+
+func TestConvertMessage_EchoesThoughtSignature(t *testing.T) {
+	m := llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{
+				ID:        "gemini-tool-do_thing",
+				Name:      "do_thing",
+				Input:     json.RawMessage(`{"x":1}`),
+				Signature: "signature-A",
+			}},
+		},
+	}
+	contents := convertMessage(m, map[string]string{})
+	if len(contents) != 1 || len(contents[0].Parts) != 1 {
+		t.Fatalf("unexpected output: %+v", contents)
+	}
+	if got := contents[0].Parts[0].ThoughtSignature; got != "signature-A" {
+		t.Errorf("ThoughtSignature = %q, want signature-A", got)
+	}
+}
+
+func TestConvertMessage_OmitsAbsentThoughtSignature(t *testing.T) {
+	// A tool call carrying no signature (a non-thinking model, or a
+	// parallel call after the first) must not put an empty
+	// thoughtSignature on the wire.
+	m := llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{
+				ID:    "gemini-tool-do_thing",
+				Name:  "do_thing",
+				Input: json.RawMessage(`{"x":1}`),
+			}},
+		},
+	}
+	contents := convertMessage(m, map[string]string{})
+	encoded, err := json.Marshal(contents[0].Parts[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "thoughtSignature") {
+		t.Errorf("part carries an empty thoughtSignature: %s", encoded)
+	}
+}
+
+func TestChatSendsThoughtSignatureBackOnSecondTurn(t *testing.T) {
+	// The second turn of a tool-calling conversation replays the
+	// model's own function call alongside the tool result, and Gemini
+	// refuses the request outright unless the signature it issued
+	// comes back on that same part.
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role":  "model",
+						"parts": []map[string]any{{"text": "It is sunny in NYC."}},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{"totalTokenCount": 4},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Weather in NYC?"}}},
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{
+					ID:        "gemini-tool-get_weather",
+					Name:      "get_weather",
+					Input:     json.RawMessage(`{"location":"NYC"}`),
+					Signature: "signature-A",
+				}},
+			}},
+			{Role: llm.RoleTool, Content: []llm.ContentBlock{
+				{Type: llm.BlockToolResult, ToolUseID: "gemini-tool-get_weather", Text: `{"temp":"22C"}`},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	contents, ok := captured["contents"].([]any)
+	if !ok || len(contents) != 3 {
+		t.Fatalf("expected 3 contents on the wire, got %v", captured["contents"])
+	}
+	part := contents[1].(map[string]any)["parts"].([]any)[0].(map[string]any)
+	if _, ok := part["functionCall"]; !ok {
+		t.Fatalf("expected a functionCall part, got %v", part)
+	}
+	if got := part["thoughtSignature"]; got != "signature-A" {
+		t.Errorf("thoughtSignature on the wire = %v, want signature-A", got)
+	}
+}

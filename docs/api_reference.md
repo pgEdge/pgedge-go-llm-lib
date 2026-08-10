@@ -410,11 +410,21 @@ type Tool struct {
 
 ```go
 type ToolUse struct {
-    ID    string          `json:"id"`
-    Name  string          `json:"name"`
-    Input json.RawMessage `json:"input"`
+    ID        string          `json:"id"`
+    Name      string          `json:"name"`
+    Input     json.RawMessage `json:"input"`
+    Signature string          `json:"signature,omitempty"`
 }
 ```
+
+`Signature` is an opaque, provider-specific token that some
+providers attach to a tool call and require to be sent back
+unchanged whenever that call is replayed as conversation
+history. Gemini's thinking models populate the field and reject
+a request whose history omits the value; other providers ignore
+the field. Treat the value as opaque, and preserve assistant
+messages intact rather than rebuilding them, which the loop
+shown in the Tool Calling document already does.
 
 ---
 
