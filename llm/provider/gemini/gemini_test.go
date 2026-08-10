@@ -220,6 +220,82 @@ func TestChatWithTools(t *testing.T) {
 	if input["location"] != "NYC" {
 		t.Errorf("expected NYC, got %v", input["location"])
 	}
+	if resp.StopReason != llm.StopReasonToolUse {
+		t.Errorf("expected StopReasonToolUse, got %q", resp.StopReason)
+	}
+}
+
+// TestChatToolCallStopReasonOverridesGenericFinish covers the case
+// TestChatWithTools' own finishReason ("STOP") would otherwise mask:
+// Gemini reports "STOP" for a function call exactly as it does for a
+// plain text turn, so a response carrying a tool_use block must still
+// come back as StopReasonToolUse rather than the generic end-turn
+// value normalizeStopReason would produce on its own.
+func TestChatToolCallStopReasonOverridesGenericFinish(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []map[string]any{
+							{"functionCall": map[string]any{"name": "get_weather", "args": map[string]any{}}},
+						},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{"totalTokenCount": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "weather?"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StopReason != llm.StopReasonToolUse {
+		t.Errorf("expected StopReasonToolUse, got %q", resp.StopReason)
+	}
+}
+
+// TestChatNoToolCallKeepsGenericFinish confirms the override in
+// parseChatResponse is scoped to responses that actually carry a tool
+// call; a plain text turn with the same "STOP" finish reason must
+// still come back as the ordinary end-turn value.
+func TestChatNoToolCallKeepsGenericFinish(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content":      map[string]any{"role": "model", "parts": []map[string]any{{"text": "hello"}}},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{"totalTokenCount": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StopReason != llm.StopReasonEndTurn {
+		t.Errorf("expected StopReasonEndTurn, got %q", resp.StopReason)
+	}
 }
 
 func TestChatToolsCompactDescription(t *testing.T) {
