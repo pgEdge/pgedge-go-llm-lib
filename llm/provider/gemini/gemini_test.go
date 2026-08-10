@@ -220,6 +220,140 @@ func TestChatWithTools(t *testing.T) {
 	if input["location"] != "NYC" {
 		t.Errorf("expected NYC, got %v", input["location"])
 	}
+	if resp.StopReason != llm.StopReasonToolUse {
+		t.Errorf("expected StopReasonToolUse, got %q", resp.StopReason)
+	}
+}
+
+// TestChatToolCallStopReasonOverridesGenericFinish covers the case
+// TestChatWithTools' own finishReason ("STOP") would otherwise mask:
+// Gemini reports "STOP" for a function call exactly as it does for a
+// plain text turn, so a response carrying a tool_use block must still
+// come back as StopReasonToolUse rather than the generic end-turn
+// value normalizeStopReason would produce on its own.
+func TestChatToolCallStopReasonOverridesGenericFinish(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []map[string]any{
+							{"functionCall": map[string]any{"name": "get_weather", "args": map[string]any{}}},
+						},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{"totalTokenCount": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "weather?"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StopReason != llm.StopReasonToolUse {
+		t.Errorf("expected StopReasonToolUse, got %q", resp.StopReason)
+	}
+}
+
+// TestChatNoToolCallKeepsGenericFinish confirms the override in
+// parseChatResponse is scoped to responses that actually carry a tool
+// call; a plain text turn with the same "STOP" finish reason must
+// still come back as the ordinary end-turn value.
+func TestChatNoToolCallKeepsGenericFinish(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content":      map[string]any{"role": "model", "parts": []map[string]any{{"text": "hello"}}},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{"totalTokenCount": 1},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StopReason != llm.StopReasonEndTurn {
+		t.Errorf("expected StopReasonEndTurn, got %q", resp.StopReason)
+	}
+}
+
+// TestChatToolCallDoesNotOverrideNonStopFinishReasons confirms the
+// StopReasonToolUse override is gated strictly on the raw "STOP"
+// finish reason, not on the already-normalised StopReasonEndTurn.
+// normalizeStopReason's default case maps any finish reason it does
+// not recognise — including Gemini's own MALFORMED_FUNCTION_CALL and
+// UNEXPECTED_TOOL_CALL, its documented signals for a tool call gone
+// wrong — to that same generic end-turn value, so gating on the
+// normalised value would incorrectly promote those to tool_use too
+// and encourage a caller to execute a call Gemini has already flagged
+// as broken. A genuinely more specific reason (MAX_TOKENS, SAFETY)
+// must also survive untouched, even with a tool-use block present.
+func TestChatToolCallDoesNotOverrideNonStopFinishReasons(t *testing.T) {
+	tests := []struct {
+		finishReason string
+		want         llm.StopReason
+	}{
+		{"MAX_TOKENS", llm.StopReasonMaxTokens},
+		{"SAFETY", llm.StopReasonContentFilter},
+		{"MALFORMED_FUNCTION_CALL", llm.StopReasonEndTurn},
+		{"UNEXPECTED_TOOL_CALL", llm.StopReasonEndTurn},
+	}
+	for _, tt := range tests {
+		t.Run(tt.finishReason, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"candidates": []map[string]any{
+						{
+							"content": map[string]any{
+								"role": "model",
+								"parts": []map[string]any{
+									{"functionCall": map[string]any{"name": "get_weather", "args": map[string]any{}}},
+								},
+							},
+							"finishReason": tt.finishReason,
+						},
+					},
+					"usageMetadata": map[string]any{"totalTokenCount": 1},
+				})
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, srv.URL)
+			resp, err := c.Chat(context.Background(), llm.ChatRequest{
+				Messages: []llm.Message{
+					{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "weather?"}}},
+				},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.StopReason != tt.want {
+				t.Errorf("expected %q, got %q", tt.want, resp.StopReason)
+			}
+		})
+	}
 }
 
 func TestChatToolsCompactDescription(t *testing.T) {
