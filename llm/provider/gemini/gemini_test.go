@@ -1220,6 +1220,122 @@ func TestBuildFunctionResponseValidJSON(t *testing.T) {
 	}
 }
 
+func TestBuildFunctionResponseErrorSignalling(t *testing.T) {
+	// What matters here is the JSON Gemini actually receives, so the
+	// assertions are made on the marshalled functionResponse part.
+	// A failed tool result must arrive under an "error" key: without
+	// it the model cannot tell the call failed and simply reissues it
+	// until the caller's agentic loop gives up.
+	tests := []struct {
+		name      string
+		block     llm.ContentBlock
+		toolNames map[string]string
+		want      string
+	}{
+		{
+			name: "error with plain text",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "call_1",
+				Text:      "permission denied",
+				IsError:   true,
+			},
+			toolNames: map[string]string{"call_1": "run_sql"},
+			want:      `{"name":"run_sql","response":{"error":"permission denied"}}`,
+		},
+		{
+			name: "error with JSON object keeps its structure",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "call_1",
+				Text:      `{"code":"42501","message":"permission denied"}`,
+				IsError:   true,
+			},
+			toolNames: map[string]string{"call_1": "run_sql"},
+			want: `{"name":"run_sql","response":{"error":` +
+				`{"code":"42501","message":"permission denied"}}}`,
+		},
+		{
+			name: "error with empty text still signals failure",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "call_1",
+				IsError:   true,
+			},
+			toolNames: map[string]string{"call_1": "run_sql"},
+			want: `{"name":"run_sql","response":{"error":` +
+				`"tool execution failed; no error message was provided"}}`,
+		},
+		{
+			name: "error recovers the name from the legacy ID prefix",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "gemini-tool-weather",
+				Text:      "upstream timeout",
+				IsError:   true,
+			},
+			toolNames: map[string]string{},
+			want:      `{"name":"weather","response":{"error":"upstream timeout"}}`,
+		},
+		{
+			name: "error falls back to the raw tool-use ID",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "weather",
+				Text:      "upstream timeout",
+				IsError:   true,
+			},
+			toolNames: map[string]string{},
+			want:      `{"name":"weather","response":{"error":"upstream timeout"}}`,
+		},
+		{
+			name: "success with plain text is unchanged",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "call_1",
+				Text:      "sunny",
+			},
+			toolNames: map[string]string{"call_1": "weather"},
+			want:      `{"name":"weather","response":{"result":"sunny"}}`,
+		},
+		{
+			name: "success with JSON object passes straight through",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "call_1",
+				Text:      `{"temp":72,"unit":"F"}`,
+			},
+			toolNames: map[string]string{"call_1": "weather"},
+			want:      `{"name":"weather","response":{"temp":72,"unit":"F"}}`,
+		},
+		{
+			name: "success with empty text is unchanged",
+			block: llm.ContentBlock{
+				Type:      llm.BlockToolResult,
+				ToolUseID: "call_1",
+			},
+			toolNames: map[string]string{"call_1": "weather"},
+			want:      `{"name":"weather","response":{"result":""}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := buildFunctionResponse(tt.block, tt.toolNames)
+			if resp == nil {
+				t.Fatal("expected FunctionResponse, got nil")
+			}
+			got, err := json.Marshal(resp)
+			if err != nil {
+				t.Fatalf("marshal failed: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("wire payload = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseChatResponseNoCandidates(t *testing.T) {
 	// Exercise the early-return when candidates is empty.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -549,21 +549,47 @@ func convertMessage(m llm.Message, toolNames map[string]string) []geminiContent 
 	return []geminiContent{{Role: role, Parts: parts}}
 }
 
+// unspecifiedToolError is the placeholder used when a tool result is
+// flagged as an error but carries no text. An empty payload would be
+// indistinguishable from a successful call that returned nothing, so
+// something explicit is sent instead.
+const unspecifiedToolError = "tool execution failed; no error message was provided"
+
 // buildFunctionResponse converts a tool-result block into Gemini's
 // functionResponse part. The function name is recovered from the
 // toolNames map (populated from prior tool-use blocks); falling back
 // to the legacy "gemini-tool-<name>" ID convention; falling back to
 // the raw ToolUseID as a last resort.
+//
+// A failed tool result (IsError) is reported under an "error" key
+// rather than the usual "result". Gemini's functionResponse.response
+// is a free-form JSON object with no documented field for failures,
+// so this is a convention rather than a protocol requirement, but it
+// is the one the ecosystem has settled on and it makes the failure
+// legible to the model. Without it an errored result looks like an
+// ordinary success, and the model happily reissues the same call
+// until the caller's agentic loop hits its cap.
 func buildFunctionResponse(b llm.ContentBlock, toolNames map[string]string) *geminiFunctionResponse {
 	name, ok := toolNames[b.ToolUseID]
 	if !ok {
 		name = strings.TrimPrefix(b.ToolUseID, "gemini-tool-")
 	}
 
-	// Parse the result text as JSON if possible; otherwise wrap.
+	key := "result"
+	if b.IsError {
+		key = "error"
+	}
+
+	// Parse the result text as JSON if possible; otherwise wrap. A
+	// structured error payload is kept structured, nested under the
+	// "error" key, rather than being flattened back to a string.
 	var responseMap map[string]any
-	if err := json.Unmarshal([]byte(b.Text), &responseMap); err != nil {
-		responseMap = map[string]any{"result": b.Text}
+	if b.IsError && b.Text == "" {
+		responseMap = map[string]any{key: unspecifiedToolError}
+	} else if err := json.Unmarshal([]byte(b.Text), &responseMap); err != nil {
+		responseMap = map[string]any{key: b.Text}
+	} else if b.IsError {
+		responseMap = map[string]any{key: responseMap}
 	}
 
 	return &geminiFunctionResponse{
