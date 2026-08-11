@@ -944,6 +944,62 @@ func (c *client) ListModels(ctx context.Context, opts ...llm.ListModelsOption) (
 	return names, nil
 }
 
+// geminiNonChatPrefixes lists model ID prefixes for families that are not
+// conversational models, in the spirit of the OpenAI provider's
+// filterPrefixes. Gemini needs both this and the substring table below,
+// because it qualifies a model's purpose after the generation rather than
+// before it.
+//
+// Each of these advertises generateContent, so supportsGenerateContent cannot
+// tell them apart from a chat model, and models.list carries no field
+// describing multi-turn support. The names are the only signal available.
+var geminiNonChatPrefixes = []string{
+	"lyria-",         // Music generation; emits audio.
+	"nano-banana",    // Image generation.
+	"antigravity-",   // Agent; rejects chat with "only supports Interactions API".
+	"deep-research-", // Research agent; rejects chat the same way.
+}
+
+// geminiNonChatSubstrings lists tokens that mark a non-chat family wherever
+// they appear in the ID, since Gemini places the qualifier at either end:
+// gemini-2.5-flash-preview-tts and gemini-3.1-flash-tts-preview are the same
+// kind of model.
+//
+// These match on output modality, which is the durable distinction: a model
+// that emits audio or an image cannot answer in text, and refuses the request
+// outright rather than degrading. The cost of matching a token rather than a
+// known list is that a future family qualified with the same word for a
+// different reason, say an image-understanding model, would be excluded
+// wrongly; that is preferred to offering a model that cannot answer at all.
+var geminiNonChatSubstrings = []string{
+	"-tts",   // Text to speech; accepts only AUDIO response modalities.
+	"-image", // Image generation, e.g. gemini-2.5-flash-image.
+}
+
+// geminiNonChatModel reports whether the model ID names a family that cannot
+// hold a text conversation, and so should not appear in the chat-focused
+// model list.
+//
+// Deliberately absent are two families that were suspected and then found to
+// work: the robotics models (gemini-robotics-er-*) and the Gemma models both
+// answer an ordinary text prompt. The computer-use models are absent too,
+// having never been confirmed either way; a model that turns out to be
+// unusable is a smaller problem than one wrongly hidden.
+func geminiNonChatModel(id string) bool {
+	lower := strings.ToLower(strings.TrimPrefix(id, "models/"))
+	for _, prefix := range geminiNonChatPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	for _, substring := range geminiNonChatSubstrings {
+		if strings.Contains(lower, substring) {
+			return true
+		}
+	}
+	return false
+}
+
 func supportsGenerateContent(methods []string) bool {
 	for _, m := range methods {
 		if m == "generateContent" {
@@ -1009,6 +1065,12 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 		} else if supportsGenerateContent(m.SupportedGenerationMethods) {
 			// Strip "models/" prefix.
 			name := strings.TrimPrefix(m.Name, "models/")
+			// Text-to-speech, image, music and agent models all advertise
+			// generateContent, so the method list alone would present them as
+			// chat models; see geminiNonChatModel.
+			if geminiNonChatModel(name) {
+				continue
+			}
 			infos = append(infos, llm.ModelInfo{ID: name, Capabilities: lookupGeminiCapabilities(name)})
 		}
 	}

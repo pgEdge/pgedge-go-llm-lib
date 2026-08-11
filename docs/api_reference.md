@@ -657,6 +657,20 @@ more `ListModelsOption` values. The only built-in option is
 `WithCapabilities(caps ...ModelCapability)`, which filters results to
 models whose `Capabilities` field contains every listed capability.
 
+Both methods return a chat-focused list rather than everything the
+provider advertises, so a caller can present the result as a choice of
+conversational models without inspecting it further. Embedding models
+are excluded unless `WithCapabilities(ModelCapabilityEmbeddings)` asks
+for them. Models that cannot hold a text conversation at all are always
+excluded, because several providers list them alongside the
+conversational ones with nothing in the metadata to tell them apart:
+OpenAI reports its speech, transcription and image models, and Gemini
+reports text-to-speech, image, music and agent models that all claim
+`generateContent`. The exclusions are matched on the model name, so a
+newly released family of that kind may appear until the provider is
+updated. Reaching such a model is a matter for the provider's own API
+rather than this library's chat methods.
+
 ### New `ModelCapability` constants
 
 - `ModelCapabilityMultimodalEmbeddings`
