@@ -3011,3 +3011,113 @@ func TestChatSendsThoughtSignatureBackOnSecondTurn(t *testing.T) {
 		t.Errorf("thoughtSignature on the wire = %v, want signature-A", got)
 	}
 }
+
+// The model IDs below are the real ones returned by v1beta/models, and the
+// verdicts come from sending each a text prompt rather than from reading the
+// names: the robotics and Gemma models answered normally, so they must keep
+// their place in the list, whilst the text-to-speech and agent models refused
+// outright.
+func TestGeminiNonChatModel(t *testing.T) {
+	nonChat := []string{
+		"gemini-2.5-flash-preview-tts",
+		"gemini-2.5-pro-preview-tts",
+		"gemini-3.1-flash-tts-preview",
+		"gemini-2.5-flash-image",
+		"gemini-3-pro-image",
+		"gemini-3-pro-image-preview",
+		"gemini-3.1-flash-lite-image",
+		"lyria-3-clip-preview",
+		"lyria-3-pro-preview",
+		"nano-banana-pro-preview",
+		"antigravity-preview-05-2026",
+		"deep-research-preview-04-2026",
+		"deep-research-max-preview-04-2026",
+		// The prefix is matched after the models/ qualifier is stripped, so
+		// the fully qualified form must be recognised too.
+		"models/gemini-2.5-flash-preview-tts",
+		// Matching is case-insensitive, as in the OpenAI provider.
+		"Gemini-2.5-Flash-Preview-TTS",
+	}
+	for _, id := range nonChat {
+		if !geminiNonChatModel(id) {
+			t.Errorf("geminiNonChatModel(%q) = false, want true", id)
+		}
+	}
+
+	chat := []string{
+		"gemini-2.5-flash",
+		"gemini-2.5-pro",
+		"gemini-3-flash-preview",
+		"gemini-3.1-pro-preview",
+		"gemini-flash-latest",
+		"gemini-pro-latest",
+		"gemini-2.5-flash-lite",
+		// Confirmed to answer a text prompt, despite the unusual names.
+		"gemini-robotics-er-1.6-preview",
+		"gemini-robotics-er-2-preview",
+		"gemma-4-31b-it",
+		"gemma-4-26b-a4b-it",
+		// Never confirmed either way, so deliberately still offered.
+		"gemini-2.5-computer-use-preview-10-2025",
+		"gemini-omni-flash-preview",
+	}
+	for _, id := range chat {
+		if geminiNonChatModel(id) {
+			t.Errorf("geminiNonChatModel(%q) = true, want false", id)
+		}
+	}
+}
+
+// ListModels must not offer a model that cannot answer in text, even though
+// every one of these advertises generateContent and so passes the method
+// check that used to be the only filter.
+func TestListModelsExcludesNonChatModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"models": []map[string]any{
+				{
+					"name":                       "models/gemini-2.5-flash",
+					"supportedGenerationMethods": []string{"generateContent", "countTokens"},
+				},
+				{
+					"name":                       "models/gemini-2.5-flash-preview-tts",
+					"supportedGenerationMethods": []string{"generateContent", "countTokens"},
+				},
+				{
+					"name":                       "models/gemini-2.5-flash-image",
+					"supportedGenerationMethods": []string{"generateContent", "batchGenerateContent"},
+				},
+				{
+					"name":                       "models/lyria-3-pro-preview",
+					"supportedGenerationMethods": []string{"generateContent"},
+				},
+				{
+					"name":                       "models/antigravity-preview-05-2026",
+					"supportedGenerationMethods": []string{"generateContent", "countTokens"},
+				},
+				{
+					"name":                       "models/gemini-robotics-er-2-preview",
+					"supportedGenerationMethods": []string{"generateContent", "countTokens"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	models, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []string{"gemini-2.5-flash", "gemini-robotics-er-2-preview"}
+	if len(models) != len(want) {
+		t.Fatalf("expected %v, got %v", want, models)
+	}
+	for i, id := range want {
+		if models[i] != id {
+			t.Errorf("model %d = %q, want %q", i, models[i], id)
+		}
+	}
+}
