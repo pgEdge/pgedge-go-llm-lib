@@ -136,16 +136,28 @@ func TestResponsesAPI_RoutesWhenForced(t *testing.T) {
 	if captured["model"] != "gpt-5" {
 		t.Errorf("model = %v, want gpt-5", captured["model"])
 	}
-	if _, ok := captured["input"]; !ok {
-		t.Errorf("input missing from request body: %#v", captured)
-	}
-	if _, ok := captured["max_output_tokens"]; !ok {
-		t.Errorf("max_output_tokens missing from request body: %#v", captured)
+	wantResponsesRequestShape(t, captured)
+	wantEchoResponse(t, resp)
+}
+
+// wantResponsesRequestShape fails the test unless the captured body is
+// shaped for /responses rather than /chat/completions.
+func wantResponsesRequestShape(t *testing.T, captured map[string]any) {
+	t.Helper()
+	for _, field := range []string{"input", "max_output_tokens"} {
+		if _, ok := captured[field]; !ok {
+			t.Errorf("%s missing from request body: %#v", field, captured)
+		}
 	}
 	if _, ok := captured["messages"]; ok {
 		t.Errorf("messages should not appear on a /responses request: %#v", captured)
 	}
+}
 
+// wantEchoResponse fails the test unless resp is the reply that
+// responsesEchoServer sends.
+func wantEchoResponse(t *testing.T, resp *llm.ChatResponse) {
+	t.Helper()
 	if len(resp.Content) != 1 || resp.Content[0].Type != llm.BlockText {
 		t.Fatalf("expected one text block, got %#v", resp.Content)
 	}

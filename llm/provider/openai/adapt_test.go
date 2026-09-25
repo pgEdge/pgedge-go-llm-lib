@@ -163,6 +163,19 @@ func mustSucceed(t *testing.T, c llm.Client, stream bool) {
 	}
 }
 
+// wantTokenField fails the test unless the request carried the token
+// limit (4096) in field alone, and not in the other token field.
+func wantTokenField(t *testing.T, r recordedRequest, field string) {
+	t.Helper()
+	other := "max_completion_tokens"
+	if field == other {
+		other = "max_tokens"
+	}
+	if r.body[field] != float64(4096) || r.has(other) {
+		t.Errorf("request should carry %s=4096 only: %v", field, r.body)
+	}
+}
+
 func TestAdapt_MaxTokensRejected(t *testing.T) {
 	modes(t, func(t *testing.T, stream bool) {
 		srv, requests := adaptServer(t, scriptedReply{400, maxTokensRejected})
@@ -173,20 +186,27 @@ func TestAdapt_MaxTokensRejected(t *testing.T) {
 		if len(got) != 2 {
 			t.Fatalf("requests = %d, want 2", len(got))
 		}
-		if !got[0].has("max_tokens") || got[0].has("max_completion_tokens") {
-			t.Errorf("first request should carry max_tokens only: %v", got[0].body)
-		}
-		if got[1].has("max_tokens") || got[1].body["max_completion_tokens"] != float64(4096) {
-			t.Errorf("retry should carry max_completion_tokens=4096 only: %v", got[1].body)
-		}
+		wantTokenField(t, got[0], "max_tokens")
+		wantTokenField(t, got[1], "max_completion_tokens")
 
 		// The adjustment is remembered: the next call makes one request.
 		mustSucceed(t, c, stream)
 		got = requests()
-		if len(got) != 3 || got[2].has("max_tokens") || !got[2].has("max_completion_tokens") {
-			t.Errorf("second call should send one request with max_completion_tokens: %v", got)
+		if len(got) != 3 {
+			t.Fatalf("requests = %d, want 3", len(got))
 		}
+		wantTokenField(t, got[2], "max_completion_tokens")
 	})
+}
+
+// wantPaths fails the test unless every request went to path.
+func wantPaths(t *testing.T, got []recordedRequest, path string) {
+	t.Helper()
+	for _, r := range got {
+		if r.path != path {
+			t.Errorf("path = %s, want %s", r.path, path)
+		}
+	}
 }
 
 func TestAdapt_TemperatureRejected(t *testing.T) {
@@ -229,11 +249,7 @@ func TestAdapt_TemperatureRejected(t *testing.T) {
 					if len(got) != 3 || got[2].has("temperature") {
 						t.Errorf("second call should send one request without temperature: %v", got)
 					}
-					for _, r := range got {
-						if r.path != ep.path {
-							t.Errorf("path = %s, want %s", r.path, ep.path)
-						}
-					}
+					wantPaths(t, got, ep.path)
 				})
 			})
 		}

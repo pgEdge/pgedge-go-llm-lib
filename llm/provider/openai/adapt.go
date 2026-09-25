@@ -87,17 +87,40 @@ func (c *client) classify(rej *rejection) (param, action string) {
 	e := errResp.Error
 
 	switch {
-	case rej.status == 400 && rej.maxTokens &&
-		e.Param == "max_tokens" && e.Code == "unsupported_parameter":
+	case rejectsMaxTokens(rej, e.Param, e.Code):
 		return adjustMaxTokens, "sent as max_completion_tokens"
-	case rej.status == 400 && rej.temperature && e.Param == "temperature" &&
-		(e.Code == "unsupported_value" || e.Code == "unsupported_parameter"):
+	case rejectsTemperature(rej, e.Param, e.Code):
 		return adjustTemperature, "omitted"
-	case (rej.status == 400 || rej.status == 404) && !rej.responses &&
-		c.forcedRoute() == nil && strings.Contains(e.Message, "v1/responses"):
+	case c.requiresResponsesAPI(rej, e.Message):
 		return adjustEndpoint, "routed to /v1/responses"
 	}
 	return "", ""
+}
+
+// rejectsMaxTokens reports whether the model refused a max_tokens the
+// request carried, as models that take max_completion_tokens do.
+func rejectsMaxTokens(rej *rejection, param, code string) bool {
+	return rej.status == 400 && rej.maxTokens &&
+		param == "max_tokens" && code == "unsupported_parameter"
+}
+
+// rejectsTemperature reports whether the model refused a temperature
+// the request carried, as models that accept only their default do.
+func rejectsTemperature(rej *rejection, param, code string) bool {
+	if rej.status != 400 || !rej.temperature || param != "temperature" {
+		return false
+	}
+	return code == "unsupported_value" || code == "unsupported_parameter"
+}
+
+// requiresResponsesAPI reports whether Chat Completions refused the
+// model because it is only available through /v1/responses, and the
+// caller has not pinned the endpoint.
+func (c *client) requiresResponsesAPI(rej *rejection, msg string) bool {
+	if rej.responses || (rej.status != 400 && rej.status != 404) {
+		return false
+	}
+	return c.forcedRoute() == nil && strings.Contains(msg, "v1/responses")
 }
 
 // learn records an adjustment on the client and logs it at Debug level.

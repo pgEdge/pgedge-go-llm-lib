@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1774,10 +1775,18 @@ var hiRequest = llm.ChatRequest{
 	Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Hi"}}}},
 }
 
-func TestChatOmitsRejectedTemperature(t *testing.T) {
-	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
-	c := newTemperatureClient(t, srv.URL, nil) // nil Logger must not panic
+// wantTemperatureSent fails the test unless the requests made so far
+// carried temperature exactly as listed.
+func wantTemperatureSent(t *testing.T, got []bool, want ...bool) {
+	t.Helper()
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("temperature sent = %v, want %v", got, want)
+	}
+}
 
+// chatOK makes a Chat call that is expected to succeed with "ok".
+func chatOK(t *testing.T, c llm.Client) {
+	t.Helper()
 	resp, err := c.Chat(context.Background(), hiRequest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1785,43 +1794,47 @@ func TestChatOmitsRejectedTemperature(t *testing.T) {
 	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
 		t.Errorf("expected 'ok', got %+v", resp.Content)
 	}
-	if got := sent(); len(got) != 2 || !got[0] || got[1] {
-		t.Fatalf("expected [temperature, no temperature], got %v", got)
+}
+
+// streamOK makes a ChatStream call that is expected to yield "ok".
+func streamOK(t *testing.T, c llm.Client) {
+	t.Helper()
+	stream, err := c.ChatStream(context.Background(), hiRequest)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
+	var text string
+	for chunk := range stream.Chunks {
+		text += chunk.Text
+	}
+	if err := <-stream.Err; err != nil {
+		t.Fatalf("unexpected stream error: %v", err)
+	}
+	if text != "ok" {
+		t.Errorf("expected 'ok', got %q", text)
+	}
+}
+
+func TestChatOmitsRejectedTemperature(t *testing.T) {
+	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
+	c := newTemperatureClient(t, srv.URL, nil) // nil Logger must not panic
+
+	chatOK(t, c)
+	wantTemperatureSent(t, sent(), true, false)
 
 	// The client remembers: the next call goes straight through without
 	// temperature, in a single request.
-	if _, err := c.Chat(context.Background(), hiRequest); err != nil {
-		t.Fatalf("unexpected error on second call: %v", err)
-	}
-	if got := sent(); len(got) != 3 || got[2] {
-		t.Fatalf("expected one further request without temperature, got %v", got)
-	}
+	chatOK(t, c)
+	wantTemperatureSent(t, sent(), true, false, false)
 }
 
 func TestChatStreamOmitsRejectedTemperature(t *testing.T) {
 	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
 	c := newTemperatureClient(t, srv.URL, nil)
 
-	for call := 0; call < 2; call++ {
-		stream, err := c.ChatStream(context.Background(), hiRequest)
-		if err != nil {
-			t.Fatalf("call %d: unexpected error: %v", call, err)
-		}
-		var text string
-		for chunk := range stream.Chunks {
-			text += chunk.Text
-		}
-		if err := <-stream.Err; err != nil {
-			t.Fatalf("call %d: unexpected stream error: %v", call, err)
-		}
-		if text != "ok" {
-			t.Errorf("call %d: expected 'ok', got %q", call, text)
-		}
-	}
-	if got := sent(); len(got) != 3 || !got[0] || got[1] || got[2] {
-		t.Fatalf("expected [true false false], got %v", got)
-	}
+	streamOK(t, c)
+	streamOK(t, c)
+	wantTemperatureSent(t, sent(), true, false, false)
 }
 
 func TestChatTemperatureRangeErrorNotRetried(t *testing.T) {
