@@ -44,6 +44,7 @@ type client struct {
 
 	mu              sync.Mutex
 	cumulativeUsage llm.TokenUsage
+	dropTemperature bool // learned: the model rejects temperature
 }
 
 // New creates a new Anthropic client.
@@ -256,21 +257,26 @@ type anthropicUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	aReq := c.buildChatRequest(req, false)
+	for {
+		aReq := c.buildChatRequest(req, false)
 
-	var aResp anthropicChatResponse
-	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
-		c.baseURL+"/messages", c.headers(), aReq, &aResp)
-	if err != nil && status == 0 {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, c.mapError(status, body)
-	}
+		var aResp anthropicChatResponse
+		status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
+			c.baseURL+"/messages", c.headers(), aReq, &aResp)
+		if err != nil && status == 0 {
+			return nil, err
+		}
+		if status < 200 || status >= 300 {
+			if c.adaptToRejection(status, body, aReq.Temperature != nil) {
+				continue
+			}
+			return nil, c.mapError(status, body)
+		}
 
-	resp := c.parseChatResponse(&aResp)
-	c.addUsage(resp.Usage)
-	return resp, nil
+		resp := c.parseChatResponse(&aResp)
+		c.addUsage(resp.Usage)
+		return resp, nil
+	}
 }
 
 func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicChatRequest {
@@ -291,7 +297,10 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicCha
 	}
 
 	// Temperature: per-request → client default → omit (use provider default).
-	if req.Temperature != nil {
+	// Always omitted once the model has rejected it (see adaptToRejection).
+	if c.omitTemperature() {
+		aReq.Temperature = nil
+	} else if req.Temperature != nil {
 		aReq.Temperature = req.Temperature
 	} else {
 		aReq.Temperature = c.opts.Temperature
@@ -513,18 +522,26 @@ func (c *client) parseChatResponse(aResp *anthropicChatResponse) *llm.ChatRespon
 // ---------- ChatStream ----------
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
-	aReq := c.buildChatRequest(req, true)
+	var resp *http.Response
+	for {
+		aReq := c.buildChatRequest(req, true)
 
-	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
-		c.baseURL+"/messages", c.headers(), aReq)
-	if err != nil {
-		return nil, err
-	}
+		var err error
+		resp, err = httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
+			c.baseURL+"/messages", c.headers(), aReq)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			break
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
 		body := make([]byte, 4096)
 		n, _ := resp.Body.Read(body)
+		resp.Body.Close()
+		if c.adaptToRejection(resp.StatusCode, body[:n], aReq.Temperature != nil) {
+			continue
+		}
 		return nil, c.mapError(resp.StatusCode, body[:n])
 	}
 
