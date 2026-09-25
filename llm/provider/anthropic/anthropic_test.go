@@ -10,13 +10,18 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1703,5 +1708,242 @@ func TestEmbedMultimodalUnsupported(t *testing.T) {
 	})
 	if !errors.Is(err, llm.ErrNotSupported) {
 		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}
+
+// ---------- Temperature rejection ----------
+
+const temperatureDeprecatedBody = `{"type":"error","error":{"type":"invalid_request_error","message":"` +
+	"`temperature` is deprecated for this model." + `"}}`
+
+// temperatureServer answers 400 with rejectBody to any request carrying a
+// temperature, and success otherwise (an SSE stream when stream is set).
+// It records whether each request carried a temperature.
+func temperatureServer(t *testing.T, rejectBody string) (*httptest.Server, func() []bool) {
+	t.Helper()
+	var mu sync.Mutex
+	var sent []bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+		_, hasTemp := req["temperature"]
+		mu.Lock()
+		sent = append(sent, hasTemp)
+		mu.Unlock()
+
+		if hasTemp {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			writeSplit(w, rejectBody)
+			return
+		}
+		if req["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}` + "\n\n"))
+			w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]bool(nil), sent...)
+	}
+}
+
+// writeSplit writes body in two flushed halves with a pause between, so
+// the client sees it arrive across more than one read and must read to
+// EOF before parsing it.
+func writeSplit(w http.ResponseWriter, body string) {
+	half := len(body) / 2
+	w.Write([]byte(body[:half]))
+	w.(http.Flusher).Flush()
+	time.Sleep(20 * time.Millisecond)
+	w.Write([]byte(body[half:]))
+}
+
+func newTemperatureClient(t *testing.T, url string, logger *slog.Logger) llm.Client {
+	t.Helper()
+	temp := 0.7
+	c, err := New(llm.Options{
+		APIKey:      "test-key",
+		Model:       "claude-test-model",
+		BaseURL:     url,
+		Temperature: &temp,
+		Logger:      logger,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	return c
+}
+
+var hiRequest = llm.ChatRequest{
+	Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Hi"}}}},
+}
+
+// wantTemperatureSent fails the test unless the requests made so far
+// carried temperature exactly as listed.
+func wantTemperatureSent(t *testing.T, got []bool, want ...bool) {
+	t.Helper()
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("temperature sent = %v, want %v", got, want)
+	}
+}
+
+// chatOK makes a Chat call that is expected to succeed with "ok".
+func chatOK(t *testing.T, c llm.Client) {
+	t.Helper()
+	resp, err := c.Chat(context.Background(), hiRequest)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Errorf("expected 'ok', got %+v", resp.Content)
+	}
+}
+
+// streamOK makes a ChatStream call that is expected to yield "ok".
+func streamOK(t *testing.T, c llm.Client) {
+	t.Helper()
+	stream, err := c.ChatStream(context.Background(), hiRequest)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var text string
+	for chunk := range stream.Chunks {
+		text += chunk.Text
+	}
+	if err := <-stream.Err; err != nil {
+		t.Fatalf("unexpected stream error: %v", err)
+	}
+	if text != "ok" {
+		t.Errorf("expected 'ok', got %q", text)
+	}
+}
+
+func TestChatOmitsRejectedTemperature(t *testing.T) {
+	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
+	c := newTemperatureClient(t, srv.URL, nil) // nil Logger must not panic
+
+	chatOK(t, c)
+	wantTemperatureSent(t, sent(), true, false)
+
+	// The client remembers: the next call goes straight through without
+	// temperature, in a single request.
+	chatOK(t, c)
+	wantTemperatureSent(t, sent(), true, false, false)
+}
+
+func TestChatStreamOmitsRejectedTemperature(t *testing.T) {
+	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
+	c := newTemperatureClient(t, srv.URL, nil)
+
+	streamOK(t, c)
+	streamOK(t, c)
+	wantTemperatureSent(t, sent(), true, false, false)
+}
+
+func TestThinkingTemperatureRejectionNotRemembered(t *testing.T) {
+	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
+	c := newTemperatureClient(t, srv.URL, nil)
+
+	// Extended thinking is set per request, so a rejection alongside it
+	// drops temperature for that call only.
+	resp, err := c.Chat(context.Background(), WithExtendedThinking(hiRequest, 8000))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Errorf("expected 'ok', got %+v", resp.Content)
+	}
+	wantTemperatureSent(t, sent(), true, false)
+
+	// A later call without thinking still tries the caller's temperature.
+	chatOK(t, c)
+	wantTemperatureSent(t, sent(), true, false, true, false)
+}
+
+func TestChatTemperatureRangeErrorNotRetried(t *testing.T) {
+	srv, sent := temperatureServer(t,
+		`{"type":"error","error":{"type":"invalid_request_error","message":"temperature: range: 0..1"}}`)
+	c := newTemperatureClient(t, srv.URL, nil)
+
+	_, err := c.Chat(context.Background(), hiRequest)
+	if !errors.Is(err, llm.ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
+	}
+	if got := sent(); len(got) != 1 {
+		t.Fatalf("expected exactly one request, got %d", len(got))
+	}
+}
+
+func TestChatTemperatureRejectionWithoutTemperatureNotRetried(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(temperatureDeprecatedBody))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL) // no temperature configured
+
+	_, err := c.Chat(context.Background(), hiRequest)
+	if !errors.Is(err, llm.ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
+	}
+	if n := count.Load(); n != 1 {
+		t.Fatalf("expected exactly one request, got %d", n)
+	}
+}
+
+func TestTemperatureRejectionLogged(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	srv, _ := temperatureServer(t, temperatureDeprecatedBody)
+	c := newTemperatureClient(t, srv.URL, logger)
+
+	for i := 0; i < 2; i++ {
+		if _, err := c.Chat(context.Background(), hiRequest); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	out := strings.TrimSpace(buf.String())
+	if lines := strings.Split(out, "\n"); len(lines) != 1 {
+		t.Fatalf("expected one log record, got %d:\n%s", len(lines), out)
+	}
+	for _, want := range []string{
+		"level=DEBUG",
+		`msg="adjusted request after provider rejected a parameter"`,
+		"provider=anthropic",
+		"model=claude-test-model",
+		"param=temperature",
+		"action=omitted",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log record missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestRejectsTemperature(t *testing.T) {
+	cases := map[string]bool{
+		"`temperature` is deprecated for this model.": true,
+		"Temperature is not supported for this model": true,
+		"temperature: unsupported parameter":          true,
+		"temperature is not allowed with thinking":    true,
+		"temperature: range: 0..1":                    false,
+		"top_p is deprecated for this model.":         false,
+		"":                                            false,
+	}
+	for msg, want := range cases {
+		if got := rejectsTemperature(msg); got != want {
+			t.Errorf("rejectsTemperature(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }

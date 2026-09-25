@@ -11,6 +11,7 @@ package llm
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -434,6 +435,15 @@ type Options struct {
 	// dashboards, or rate-limit tracking. Hooks run synchronously on
 	// the request goroutine; keep them fast.
 	OnRetry func(RetryEvent)
+
+	// Logger receives diagnostic records from the providers. Nil (the
+	// default) keeps the library silent. At Debug level a provider
+	// records each adjustment it makes after the upstream API rejects a
+	// request, whether a parameter the model does not accept (such as
+	// omitting temperature for a model that refuses it) or the endpoint
+	// (such as routing an OpenAI model to /v1/responses), so the change
+	// in the request sent is visible rather than silent.
+	Logger *slog.Logger
 
 	// Extensions carries client-level provider-specific options. Use
 	// this for tunables that the unified Client API doesn't surface

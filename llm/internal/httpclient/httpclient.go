@@ -210,6 +210,18 @@ func DoSSERequest(ctx context.Context, client *http.Client, method, url string, 
 	return resp, nil
 }
 
+// maxErrorBody bounds how much of a non-2xx response body ReadErrorBody
+// keeps; provider error payloads are small JSON documents.
+const maxErrorBody = 64 << 10
+
+// ReadErrorBody reads a non-2xx response body to EOF, up to 64 KiB, so a
+// JSON error split across several reads is still whole when parsed. A
+// read error keeps whatever arrived before it.
+func ReadErrorBody(r io.Reader) []byte {
+	body, _ := io.ReadAll(io.LimitReader(r, maxErrorBody))
+	return body
+}
+
 // SSEScanner reads server-sent events from an io.Reader.
 type SSEScanner struct {
 	scanner *bufio.Scanner

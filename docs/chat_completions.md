@@ -171,6 +171,15 @@ allows the library to talk to models that reject a temperature
 outright. An explicitly-set `0` is not treated as unset: it is
 preserved and sent as `temperature: 0`.
 
+A temperature that you set is treated as a preference rather
+than a requirement. Some models, such as newer Claude models
+and OpenAI reasoning models, reject any temperature other than
+their own default. When the API rejects the temperature, the
+Anthropic and OpenAI providers resend the request without it
+and omit the temperature from every later request made by the
+same client. Set `Options.Logger` to record these adjustments
+at the Debug level.
+
 ## Response Format (JSON Mode)
 
 The `ResponseFormat` field constrains the model's output

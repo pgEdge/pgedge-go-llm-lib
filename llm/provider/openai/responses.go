@@ -21,26 +21,6 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
 )
 
-// useResponsesAPI reports whether a Chat / ChatStream call should be
-// routed to /v1/responses instead of /v1/chat/completions. An explicit
-// openai.Extension{ResponsesAPI: ...} override takes precedence; when
-// unset, the decision is auto-detected from the model name.
-func useResponsesAPI(model string, exts []llm.ProviderExtension) bool {
-	if ext := findExtension(exts); ext != nil && ext.ResponsesAPI != nil {
-		return *ext.ResponsesAPI
-	}
-	return modelRequiresResponsesAPI(model)
-}
-
-// modelRequiresResponsesAPI reports whether the named model rejects
-// /v1/chat/completions and must be invoked via /v1/responses. Current
-// members of the set: o1*, o3*, gpt-5*.
-func modelRequiresResponsesAPI(model string) bool {
-	return strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "gpt-5")
-}
-
 // ---------- Wire types: request ----------
 
 // responsesRequest is the request body for POST /v1/responses.
@@ -178,18 +158,13 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 		out.MaxOutputTokens = c.opts.MaxTokens
 	}
 
-	// Temperature: per-request → client default → omit. Reasoning
-	// models (o1/o3/gpt-5) reject every value except their own default
-	// (effectively 1); the library default of 0.7 would cause every
-	// auto-routed call to fail. For those models we forward only an
-	// explicitly-set per-request value and never the client default,
-	// so omitting Temperature on the call lets the model use its own
-	// default. Forced /v1/responses routing for non-reasoning models
-	// (e.g. gpt-4o with Extension{ResponsesAPI: llm.Bool(true)}) still
-	// honours the client default.
-	if req.Temperature != nil {
+	// Temperature: per-request → client default → omit, and always
+	// omitted once the model has rejected it.
+	if c.learnedFlags().dropTemperature {
+		out.Temperature = nil
+	} else if req.Temperature != nil {
 		out.Temperature = req.Temperature
-	} else if c.opts.Temperature != nil && !modelRequiresResponsesAPI(c.model) {
+	} else {
 		out.Temperature = c.opts.Temperature
 	}
 
@@ -351,9 +326,11 @@ func convertResponsesToolMessage(m llm.Message) []responsesInputItem {
 
 // ---------- Chat (non-streaming) ----------
 
-func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+// chatResponses sends one request to /responses. A non-2xx response
+// is returned as a rejection for Chat to classify.
+func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, *rejection, error) {
 	if err := rejectResponsesUnsupported(req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	body := c.buildResponsesRequest(req, false)
 
@@ -361,15 +338,25 @@ func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest) (*llm.C
 	status, respBody, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/responses", c.headers(), body, &raw)
 	if err != nil && status == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, c.mapError(status, respBody)
+		return nil, body.rejection(status, respBody), nil
 	}
 
 	resp := parseResponsesResponse(&raw)
 	c.addUsage(resp.Usage)
-	return resp, nil
+	return resp, nil, nil
+}
+
+// rejection describes a non-2xx response to this request.
+func (r responsesRequest) rejection(status int, body []byte) *rejection {
+	return &rejection{
+		status:      status,
+		body:        body,
+		responses:   true,
+		temperature: r.Temperature != nil,
+	}
 }
 
 func parseResponsesResponse(raw *responsesResponse) *llm.ChatResponse {
@@ -429,23 +416,24 @@ func responsesStopReason(raw *responsesResponse, sawToolCall bool) llm.StopReaso
 
 // ---------- ChatStream ----------
 
-func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+// chatStreamResponses sends one streaming request to /responses. A
+// non-2xx response arrives before the stream starts and is returned as
+// a rejection for ChatStream to classify.
+func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (*llm.Stream, *rejection, error) {
 	if err := rejectResponsesUnsupported(req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	body := c.buildResponsesRequest(req, true)
 
 	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/responses", c.headers(), body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		buf := make([]byte, 4096)
-		n, _ := resp.Body.Read(buf)
-		return nil, c.mapError(resp.StatusCode, buf[:n])
+		return nil, body.rejection(resp.StatusCode, httpclient.ReadErrorBody(resp.Body)), nil
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)
@@ -539,7 +527,7 @@ func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (
 	return &llm.Stream{
 		Chunks: chunks,
 		Err:    errCh,
-	}, nil
+	}, nil, nil
 }
 
 // rejectResponsesUnsupported returns ErrNotSupported for ChatRequest
@@ -552,7 +540,7 @@ func rejectResponsesUnsupported(req llm.ChatRequest) error {
 	if len(req.StopSequences) > 0 {
 		return &llm.ProviderError{
 			Err:      llm.ErrNotSupported,
-			Message:  "OpenAI Responses API does not accept stop sequences; omit StopSequences when targeting o1/o3/gpt-5 models or set openai.Extension{ResponsesAPI: llm.Bool(false)} to force the Chat Completions API",
+			Message:  "OpenAI Responses API does not accept stop sequences; omit StopSequences when the model or configuration routes the call to the Responses API, or set openai.Extension{ResponsesAPI: llm.Bool(false)} to force the Chat Completions API",
 			Provider: providerName,
 		}
 	}

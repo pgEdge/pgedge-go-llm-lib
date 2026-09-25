@@ -45,6 +45,11 @@ type client struct {
 
 	mu              sync.Mutex
 	cumulativeUsage llm.TokenUsage
+
+	// learnedMu guards learned, the request adjustments made after
+	// OpenAI rejected a parameter or endpoint (see adapt.go).
+	learnedMu sync.Mutex
+	learned   learned
 }
 
 // New creates a new OpenAI client.
@@ -149,14 +154,6 @@ func rejectDocumentBlocks(req llm.ChatRequest) error {
 	return nil
 }
 
-// useMaxCompletionTokens returns true for models that require
-// max_completion_tokens instead of max_tokens.
-func useMaxCompletionTokens(model string) bool {
-	return strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "gpt-5")
-}
-
 // ---------- Chat ----------
 
 // openaiChatRequest is the request body for /chat/completions.
@@ -255,11 +252,19 @@ type openaiUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	if useResponsesAPI(c.model, c.opts.Extensions) {
-		return c.chatResponses(ctx, req)
-	}
+	return sendWithAdjustments(c, func(responses bool) (*llm.ChatResponse, *rejection, error) {
+		if responses {
+			return c.chatResponses(ctx, req)
+		}
+		return c.chatCompletions(ctx, req)
+	})
+}
+
+// chatCompletions sends one request to /chat/completions. A non-2xx
+// response is returned as a rejection for Chat to classify.
+func (c *client) chatCompletions(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, *rejection, error) {
 	if err := rejectDocumentBlocks(req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	oaiReq := c.buildChatRequest(req, false)
 
@@ -267,18 +272,29 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/chat/completions", c.headers(), oaiReq, &oaiResp)
 	if err != nil && status == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, c.mapError(status, body)
+		return nil, oaiReq.rejection(status, body), nil
 	}
 
 	resp := c.parseChatResponse(&oaiResp)
 	c.addUsage(resp.Usage)
-	return resp, nil
+	return resp, nil, nil
+}
+
+// rejection describes a non-2xx response to this request.
+func (r openaiChatRequest) rejection(status int, body []byte) *rejection {
+	return &rejection{
+		status:      status,
+		body:        body,
+		maxTokens:   r.MaxTokens != nil,
+		temperature: r.Temperature != nil,
+	}
 }
 
 func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRequest {
+	adjust := c.learnedFlags()
 	oaiReq := openaiChatRequest{
 		Model:    c.model,
 		Messages: c.convertMessages(req),
@@ -297,15 +313,18 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRe
 		maxTokens = c.opts.MaxTokens
 	}
 	if maxTokens != nil {
-		if useMaxCompletionTokens(c.model) {
+		if adjust.maxCompletionTokens {
 			oaiReq.MaxCompletionTokens = maxTokens
 		} else {
 			oaiReq.MaxTokens = maxTokens
 		}
 	}
 
-	// Temperature: per-request → client default → omit (use provider default).
-	if req.Temperature != nil {
+	// Temperature: per-request → client default → omit (use provider
+	// default), and always omitted once the model has rejected it.
+	if adjust.dropTemperature {
+		oaiReq.Temperature = nil
+	} else if req.Temperature != nil {
 		oaiReq.Temperature = req.Temperature
 	} else {
 		oaiReq.Temperature = c.opts.Temperature
@@ -602,25 +621,32 @@ type streamDeltaFunction struct {
 }
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
-	if useResponsesAPI(c.model, c.opts.Extensions) {
-		return c.chatStreamResponses(ctx, req)
-	}
+	return sendWithAdjustments(c, func(responses bool) (*llm.Stream, *rejection, error) {
+		if responses {
+			return c.chatStreamResponses(ctx, req)
+		}
+		return c.chatStreamCompletions(ctx, req)
+	})
+}
+
+// chatStreamCompletions sends one streaming request to
+// /chat/completions. A non-2xx response arrives before the stream
+// starts and is returned as a rejection for ChatStream to classify.
+func (c *client) chatStreamCompletions(ctx context.Context, req llm.ChatRequest) (*llm.Stream, *rejection, error) {
 	if err := rejectDocumentBlocks(req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	oaiReq := c.buildChatRequest(req, true)
 
 	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/chat/completions", c.headers(), oaiReq)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		body := make([]byte, 4096)
-		n, _ := resp.Body.Read(body)
-		return nil, c.mapError(resp.StatusCode, body[:n])
+		return nil, oaiReq.rejection(resp.StatusCode, httpclient.ReadErrorBody(resp.Body)), nil
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)
@@ -726,7 +752,7 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 	return &llm.Stream{
 		Chunks: chunks,
 		Err:    errCh,
-	}, nil
+	}, nil, nil
 }
 
 // ---------- Embed ----------
@@ -982,6 +1008,8 @@ type openaiErrorResponse struct {
 	Error struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
+		Param   string `json:"param"`
+		Code    string `json:"code"`
 	} `json:"error"`
 }
 

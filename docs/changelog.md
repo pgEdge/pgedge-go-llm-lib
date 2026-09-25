@@ -8,6 +8,15 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Chat requests no longer fail on models that reject a parameter the library sends ([#42](https://github.com/pgEdge/pgedge-go-llm-lib/issues/42)). Sonnet 5 and the other Claude models that accept only adaptive thinking refuse a non-default `temperature` with a 400, whilst OpenAI's gpt-6 models refuse `max_tokens` and were never routed to the Responses API, because the OpenAI provider chose both the token parameter and the endpoint from a list of model name prefixes (`o1`, `o3`, `gpt-5`) that every new model generation outgrew. That list is gone: the providers now send the request in its standard form and, when the API returns an error naming a parameter the request carried, adjust it, resend it once and apply the same adjustment to every later request from that client, so each costs one extra round trip per client rather than a failure. The Anthropic provider omits a rejected `temperature`; the OpenAI provider sends `max_completion_tokens` in place of a rejected `max_tokens`, omits a rejected `temperature` on either endpoint, and moves to `/v1/responses` when Chat Completions reports that the model is only available there. Errors that do not name a rejected parameter, such as a temperature outside the permitted range, still reach the caller unchanged
+- **Behaviour change:** OpenAI clients for `o1`, `o3` and `gpt-5` models now start on Chat Completions rather than the Responses API, since most of them accept both, and move only when the API says they must. A caller relying on the Responses API for them should set `openai.Extension{ResponsesAPI: llm.Bool(true)}`, which still takes precedence, as does `llm.Bool(false)`, which now also stops the automatic move
+
+### Added
+- `llm.Options.Logger`, an optional `*slog.Logger`. When set, the providers record each request adjustment described above at Debug level, naming the provider, model, parameter and action taken; when nil, the default, the library stays silent
+
 ## [0.3.1] - 2026-08-17
 
 ### Fixed

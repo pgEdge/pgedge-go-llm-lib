@@ -28,11 +28,12 @@ type Extension struct {
 	EmbeddingDimensions int
 
 	// ResponsesAPI overrides automatic Chat-Completions vs. Responses
-	// routing. By default (nil), the provider auto-routes to
-	// /v1/responses for models that require it (o1*, o3*, gpt-5*) and
-	// /v1/chat/completions for all other models. Set to llm.Bool(true)
-	// to force the Responses API, or llm.Bool(false) to force the
-	// Chat Completions API for every Chat / ChatStream call.
+	// routing. By default (nil), the provider uses /v1/chat/completions
+	// and switches the client to /v1/responses the first time OpenAI
+	// reports that the model is only available there. Set to
+	// llm.Bool(true) to force the Responses API, or llm.Bool(false) to
+	// force the Chat Completions API for every Chat / ChatStream call
+	// and disable the automatic switch.
 	ResponsesAPI *bool
 }
 

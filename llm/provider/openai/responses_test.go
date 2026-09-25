@@ -22,26 +22,20 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
-func TestUseResponsesAPI_AutoDetect(t *testing.T) {
-	cases := []struct {
-		model string
-		want  bool
-	}{
-		{"gpt-4o", false},
-		{"gpt-4o-mini", false},
-		{"gpt-3.5-turbo", false},
-		{"gpt-5", true},
-		{"gpt-5-turbo", true},
-		{"o1", true},
-		{"o1-preview", true},
-		{"o1-mini", true},
-		{"o3", true},
-		{"o3-mini", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.model, func(t *testing.T) {
-			if got := useResponsesAPI(tc.model, nil); got != tc.want {
-				t.Errorf("useResponsesAPI(%q, nil) = %v, want %v", tc.model, got, tc.want)
+// forceResponses routes every Chat / ChatStream call to /v1/responses.
+var forceResponses = []llm.ProviderExtension{Extension{ResponsesAPI: llm.Bool(true)}}
+
+func TestUseResponsesAPI_DefaultsToChatCompletions(t *testing.T) {
+	// No model name routes to /v1/responses on its own; the client
+	// switches only after OpenAI says so (see adapt_test.go).
+	for _, model := range []string{"gpt-4o", "gpt-5", "o1-preview", "o3-mini"} {
+		t.Run(model, func(t *testing.T) {
+			c, err := New(llm.Options{APIKey: "test-key", Model: model})
+			if err != nil {
+				t.Fatalf("create client: %v", err)
+			}
+			if c.(*client).useResponsesAPI() {
+				t.Errorf("useResponsesAPI() = true for %q, want false", model)
 			}
 		})
 	}
@@ -49,21 +43,31 @@ func TestUseResponsesAPI_AutoDetect(t *testing.T) {
 
 func TestUseResponsesAPI_ExtensionOverride(t *testing.T) {
 	cases := []struct {
-		name  string
-		model string
-		ext   *bool
-		want  bool
+		name    string
+		ext     *bool
+		learned bool
+		want    bool
 	}{
-		{"force-on-for-gpt-4o", "gpt-4o", llm.Bool(true), true},
-		{"force-off-for-gpt-5", "gpt-5", llm.Bool(false), false},
-		{"nil-falls-back-to-auto-gpt-4o", "gpt-4o", nil, false},
-		{"nil-falls-back-to-auto-gpt-5", "gpt-5", nil, true},
+		{"force-on", llm.Bool(true), false, true},
+		{"force-off-beats-learned", llm.Bool(false), true, false},
+		{"nil-uses-default", nil, false, false},
+		{"nil-uses-learned", nil, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			exts := []llm.ProviderExtension{Extension{ResponsesAPI: tc.ext}}
-			if got := useResponsesAPI(tc.model, exts); got != tc.want {
-				t.Errorf("useResponsesAPI(%q, ext=%v) = %v, want %v", tc.model, tc.ext, got, tc.want)
+			c, err := New(llm.Options{
+				APIKey:     "test-key",
+				Model:      "gpt-4o",
+				Extensions: []llm.ProviderExtension{Extension{ResponsesAPI: tc.ext}},
+			})
+			if err != nil {
+				t.Fatalf("create client: %v", err)
+			}
+			cl := c.(*client)
+			cl.learned.responsesAPI = tc.learned
+			if got := cl.useResponsesAPI(); got != tc.want {
+				t.Errorf("useResponsesAPI() with ext=%v, learned=%v = %v, want %v",
+					tc.ext, tc.learned, got, tc.want)
 			}
 		})
 	}
@@ -106,16 +110,17 @@ func responsesEchoServer(t *testing.T, captured *map[string]any) *httptest.Serve
 	}))
 }
 
-func TestResponsesAPI_RoutesGPT5(t *testing.T) {
+func TestResponsesAPI_RoutesWhenForced(t *testing.T) {
 	var captured map[string]any
 	srv := responsesEchoServer(t, &captured)
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -131,16 +136,28 @@ func TestResponsesAPI_RoutesGPT5(t *testing.T) {
 	if captured["model"] != "gpt-5" {
 		t.Errorf("model = %v, want gpt-5", captured["model"])
 	}
-	if _, ok := captured["input"]; !ok {
-		t.Errorf("input missing from request body: %#v", captured)
-	}
-	if _, ok := captured["max_output_tokens"]; !ok {
-		t.Errorf("max_output_tokens missing from request body: %#v", captured)
+	wantResponsesRequestShape(t, captured)
+	wantEchoResponse(t, resp)
+}
+
+// wantResponsesRequestShape fails the test unless the captured body is
+// shaped for /responses rather than /chat/completions.
+func wantResponsesRequestShape(t *testing.T, captured map[string]any) {
+	t.Helper()
+	for _, field := range []string{"input", "max_output_tokens"} {
+		if _, ok := captured[field]; !ok {
+			t.Errorf("%s missing from request body: %#v", field, captured)
+		}
 	}
 	if _, ok := captured["messages"]; ok {
 		t.Errorf("messages should not appear on a /responses request: %#v", captured)
 	}
+}
 
+// wantEchoResponse fails the test unless resp is the reply that
+// responsesEchoServer sends.
+func wantEchoResponse(t *testing.T, resp *llm.ChatResponse) {
+	t.Helper()
 	if len(resp.Content) != 1 || resp.Content[0].Type != llm.BlockText {
 		t.Fatalf("expected one text block, got %#v", resp.Content)
 	}
@@ -187,10 +204,11 @@ func TestResponsesAPI_TranslatesSystemPromptToInstructions(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -213,10 +231,11 @@ func TestResponsesAPI_ToolsWireShape(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -256,10 +275,11 @@ func TestResponsesAPI_ToolsCompactDescription(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -308,10 +328,11 @@ func TestResponsesAPI_ParsesToolCall(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -361,10 +382,11 @@ func TestResponsesAPI_MaxOutputTokensStopReason(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -386,10 +408,11 @@ func TestResponsesAPI_AssistantAndToolHistory(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -432,10 +455,11 @@ func TestResponsesAPI_AssistantAndToolHistory(t *testing.T) {
 
 func TestResponsesAPI_RejectsStopSequences(t *testing.T) {
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: "https://example.invalid",
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    "https://example.invalid",
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -478,10 +502,11 @@ func TestResponsesAPI_Stream(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -536,10 +561,11 @@ func TestResponsesAPI_StreamToolCall(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -592,10 +618,11 @@ func TestResponsesAPI_AccumulatesUsage(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -621,10 +648,11 @@ func TestResponsesAPI_AuthError(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -648,6 +676,7 @@ func TestResponsesAPI_PerRequestOverrides(t *testing.T) {
 	c, err := New(llm.Options{
 		APIKey:      "test-key",
 		Model:       "gpt-5",
+		Extensions:  forceResponses,
 		BaseURL:     srv.URL,
 		Retry:       llm.RetryConfig{Disabled: true},
 		MaxTokens:   llm.Int(100),
@@ -677,10 +706,11 @@ func TestResponsesAPI_UserMessageWithInlineImage(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -718,10 +748,11 @@ func TestResponsesAPI_UserMessageWithImageURL(t *testing.T) {
 	defer srv.Close()
 
 	c, err := New(llm.Options{
-		APIKey:  "test-key",
-		Model:   "gpt-5",
-		BaseURL: srv.URL,
-		Retry:   llm.RetryConfig{Disabled: true},
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    srv.URL,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -827,10 +858,11 @@ func TestResponsesAPI_ToolChoiceModes(t *testing.T) {
 			srv := responsesEchoServer(t, &captured)
 			defer srv.Close()
 			c, err := New(llm.Options{
-				APIKey:  "test-key",
-				Model:   "gpt-5",
-				BaseURL: srv.URL,
-				Retry:   llm.RetryConfig{Disabled: true},
+				APIKey:     "test-key",
+				Model:      "gpt-5",
+				Extensions: forceResponses,
+				BaseURL:    srv.URL,
+				Retry:      llm.RetryConfig{Disabled: true},
 			})
 			if err != nil {
 				t.Fatalf("create client: %v", err)
@@ -863,7 +895,8 @@ func TestResponsesAPI_ResponseFormatJSON(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -888,7 +921,8 @@ func TestResponsesAPI_ResponseFormatJSONSchema(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -923,7 +957,8 @@ func TestResponsesAPI_IncompleteStatusMapsToMaxTokens(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -942,7 +977,8 @@ func TestResponsesAPI_IncompleteStatusMapsToMaxTokens(t *testing.T) {
 func TestResponsesAPI_RejectsDocumentBlock(t *testing.T) {
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: "https://example.invalid",
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -965,8 +1001,9 @@ func TestResponsesAPI_NetworkErrorReturnsBare(t *testing.T) {
 	// network-level error (status == 0).
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5",
-		BaseURL: "http://127.0.0.1:1",
-		Retry:   llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		BaseURL:    "http://127.0.0.1:1",
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -988,7 +1025,8 @@ func TestResponsesAPI_StreamHTTPError(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -1015,7 +1053,8 @@ func TestResponsesAPI_StreamMalformedJSONSurfacesError(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -1044,7 +1083,8 @@ func TestResponsesAPI_StreamResponseFailed(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -1089,7 +1129,8 @@ func TestResponsesAPI_StreamIgnoresEmptyDeltasAndUnknownItems(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -1124,83 +1165,46 @@ func TestResponsesAPI_StreamIgnoresEmptyDeltasAndUnknownItems(t *testing.T) {
 	}
 }
 
-func TestResponsesAPI_OmitsClientDefaultTemperatureForReasoningModels(t *testing.T) {
-	// Reasoning models (o1/o3/gpt-5) reject every temperature value
-	// except their own default (effectively 1). The library default
-	// of 0.7 must NOT be forwarded; only an explicit per-request
-	// value gets sent.
-	t.Run("client-default-dropped", func(t *testing.T) {
-		var captured map[string]any
-		srv := responsesEchoServer(t, &captured)
-		defer srv.Close()
+func TestResponsesAPI_TemperaturePrecedence(t *testing.T) {
+	// Temperature follows per-request → client default → omit, as on
+	// /chat/completions. A model that rejects it has it dropped after
+	// the first rejection (see adapt_test.go), not in advance by name.
+	cases := []struct {
+		name      string
+		clientDef *float64
+		perReq    *float64
+		want      any
+	}{
+		{"client-default-sent", llm.Float(0.7), nil, 0.7},
+		{"per-request-beats-default", llm.Float(0.7), llm.Float(1), float64(1)},
+		{"unset-omitted", nil, nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured map[string]any
+			srv := responsesEchoServer(t, &captured)
+			defer srv.Close()
 
-		c, err := New(llm.Options{
-			APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-			Retry:       llm.RetryConfig{Disabled: true},
-			Temperature: llm.Float(0.7),
+			c, err := New(llm.Options{
+				APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
+				Retry:       llm.RetryConfig{Disabled: true},
+				Temperature: tc.clientDef,
+				Extensions:  forceResponses,
+			})
+			if err != nil {
+				t.Fatalf("create client: %v", err)
+			}
+			if _, err := c.Chat(context.Background(), llm.ChatRequest{
+				Messages:    []llm.Message{llm.UserText("Hi")},
+				Temperature: tc.perReq,
+			}); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if got := captured["temperature"]; got != tc.want {
+				t.Errorf("temperature = %v, want %v", got, tc.want)
+			}
 		})
-		if err != nil {
-			t.Fatalf("create client: %v", err)
-		}
-		if _, err := c.Chat(context.Background(), llm.ChatRequest{
-			Messages: []llm.Message{llm.UserText("Hi")},
-		}); err != nil {
-			t.Fatalf("Chat: %v", err)
-		}
-		if _, present := captured["temperature"]; present {
-			t.Errorf("client-default temperature must not be sent for reasoning models; got %#v", captured)
-		}
-	})
-
-	t.Run("explicit-per-request-temperature-still-sent", func(t *testing.T) {
-		var captured map[string]any
-		srv := responsesEchoServer(t, &captured)
-		defer srv.Close()
-
-		c, err := New(llm.Options{
-			APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-			Retry: llm.RetryConfig{Disabled: true},
-		})
-		if err != nil {
-			t.Fatalf("create client: %v", err)
-		}
-		if _, err := c.Chat(context.Background(), llm.ChatRequest{
-			Messages:    []llm.Message{llm.UserText("Hi")},
-			Temperature: llm.Float(1),
-		}); err != nil {
-			t.Fatalf("Chat: %v", err)
-		}
-		if got := captured["temperature"]; got != float64(1) {
-			t.Errorf("temperature = %v, want 1 (explicit per-request value)", got)
-		}
-	})
-
-	t.Run("non-reasoning-model-forced-onto-responses-keeps-default", func(t *testing.T) {
-		// Forcing a non-reasoning model (gpt-4o) onto /v1/responses
-		// must still honour the client-default temperature, since the
-		// API accepts it for those models.
-		var captured map[string]any
-		srv := responsesEchoServer(t, &captured)
-		defer srv.Close()
-
-		c, err := New(llm.Options{
-			APIKey: "test-key", Model: "gpt-4o", BaseURL: srv.URL,
-			Retry:       llm.RetryConfig{Disabled: true},
-			Temperature: llm.Float(0.5),
-			Extensions:  []llm.ProviderExtension{Extension{ResponsesAPI: llm.Bool(true)}},
-		})
-		if err != nil {
-			t.Fatalf("create client: %v", err)
-		}
-		if _, err := c.Chat(context.Background(), llm.ChatRequest{
-			Messages: []llm.Message{llm.UserText("Hi")},
-		}); err != nil {
-			t.Fatalf("Chat: %v", err)
-		}
-		if got := captured["temperature"]; got != 0.5 {
-			t.Errorf("temperature = %v, want 0.5", got)
-		}
-	})
+	}
 }
 
 func TestResponsesAPI_StreamSurfacesScannerError(t *testing.T) {
@@ -1219,7 +1223,8 @@ func TestResponsesAPI_StreamSurfacesScannerError(t *testing.T) {
 
 	c, err := New(llm.Options{
 		APIKey: "test-key", Model: "gpt-5", BaseURL: srv.URL,
-		Retry: llm.RetryConfig{Disabled: true},
+		Extensions: forceResponses,
+		Retry:      llm.RetryConfig{Disabled: true},
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
@@ -1238,8 +1243,15 @@ func TestResponsesAPI_StreamSurfacesScannerError(t *testing.T) {
 }
 
 func TestResponsesAPI_FindExtensionAcceptsPointer(t *testing.T) {
-	exts := []llm.ProviderExtension{&Extension{ResponsesAPI: llm.Bool(true)}}
-	if !useResponsesAPI("gpt-4o", exts) {
+	c, err := New(llm.Options{
+		APIKey:     "test-key",
+		Model:      "gpt-4o",
+		Extensions: []llm.ProviderExtension{&Extension{ResponsesAPI: llm.Bool(true)}},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if !c.(*client).useResponsesAPI() {
 		t.Error("pointer Extension with ResponsesAPI=true should force routing")
 	}
 }

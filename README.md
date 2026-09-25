@@ -94,6 +94,7 @@ import (
 | `RequestTimeout` | `time.Duration`     | Wall-clock cap for a single HTTP attempt (0 → 120 s default). |
 | `Retry`          | `RetryConfig`       | Retry policy (see below). |
 | `OnRetry`        | `func(RetryEvent)`  | Observability hook fired before each retry sleep. |
+| `Logger`         | `*slog.Logger`      | Diagnostics sink; `nil` keeps the library silent. Records request adjustments at Debug level (see below). |
 
 **Precedence rule:** `Temperature` and `MaxTokens` on `ChatRequest` override the
 `Options` defaults for that request. A `nil` pointer on `ChatRequest` falls
@@ -102,7 +103,10 @@ through to the `Options` value.
 Leaving `Temperature` unset in both places omits the field from the upstream
 request entirely, which matters because some newer models reject any
 temperature at all; an explicitly-set `0` is preserved and sent as
-`temperature: 0`.
+`temperature: 0`. A temperature that a model rejects is dropped: the
+Anthropic and OpenAI providers resend the request without it, remember
+that for the rest of the client's life, and log the adjustment to
+`Options.Logger` at Debug level.
 
 ### Retry
 
