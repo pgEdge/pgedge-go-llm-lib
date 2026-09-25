@@ -101,19 +101,24 @@ func (c *client) classify(rej *rejection) (param, action string) {
 }
 
 // learn records an adjustment on the client and logs it at Debug level.
+// Only the first time an adjustment is learned is logged, so concurrent
+// calls that all hit the same rejection produce a single record.
 func (c *client) learn(param, action string) {
+	var flag *bool
 	c.learnedMu.Lock()
 	switch param {
 	case adjustMaxTokens:
-		c.learned.maxCompletionTokens = true
+		flag = &c.learned.maxCompletionTokens
 	case adjustTemperature:
-		c.learned.dropTemperature = true
+		flag = &c.learned.dropTemperature
 	case adjustEndpoint:
-		c.learned.responsesAPI = true
+		flag = &c.learned.responsesAPI
 	}
+	first := !*flag
+	*flag = true
 	c.learnedMu.Unlock()
 
-	if c.opts.Logger != nil {
+	if first && c.opts.Logger != nil {
 		c.opts.Logger.Debug("adjusted request after provider rejected a parameter",
 			"provider", providerName, "model", c.model,
 			"param", param, "action", action)
@@ -133,11 +138,17 @@ func sendWithAdjustments[T any](c *client, send func(responses bool) (T, *reject
 			return out, err
 		}
 		param, action := c.classify(rej)
-		if param == "" || applied[param] || sends == maxSends {
+		if param == "" || applied[param] {
 			var zero T
 			return zero, c.mapError(rej.status, rej.body)
 		}
+		// Learn even from the final send, so the next call is built
+		// correctly rather than hitting the same rejection first.
 		applied[param] = true
 		c.learn(param, action)
+		if sends == maxSends {
+			var zero T
+			return zero, c.mapError(rej.status, rej.body)
+		}
 	}
 }

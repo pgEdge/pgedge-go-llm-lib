@@ -322,7 +322,8 @@ func TestAdapt_ChainedAdjustments(t *testing.T) {
 
 func TestAdapt_StopsAfterThreeSends(t *testing.T) {
 	// Three different adjustments would need a fourth request; the
-	// call gives up and returns the third rejection instead.
+	// call gives up and returns the third rejection instead, but still
+	// learns from it, so the next call succeeds first time.
 	modes(t, func(t *testing.T, stream bool) {
 		srv, requests := adaptServer(t,
 			scriptedReply{400, maxTokensRejected},
@@ -337,6 +338,15 @@ func TestAdapt_StopsAfterThreeSends(t *testing.T) {
 		}
 		if got := requests(); len(got) != 3 {
 			t.Errorf("requests = %d, want 3", len(got))
+		}
+
+		mustSucceed(t, c, stream)
+		got := requests()
+		if len(got) != 4 {
+			t.Fatalf("requests = %d, want 4", len(got))
+		}
+		if got[3].path != "/responses" || got[3].has("temperature") {
+			t.Errorf("follow-up call should go to /responses without temperature: %s %v", got[3].path, got[3].body)
 		}
 	})
 }
