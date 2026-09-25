@@ -439,9 +439,10 @@ type Options struct {
 	// Logger receives diagnostic records from the providers. Nil (the
 	// default) keeps the library silent. At Debug level a provider
 	// records each adjustment it makes after the upstream API rejects a
-	// parameter the model does not accept, such as omitting
-	// temperature for a model that refuses it, so the change in the
-	// request sent is visible rather than silent.
+	// request, whether a parameter the model does not accept (such as
+	// omitting temperature for a model that refuses it) or the endpoint
+	// (such as routing an OpenAI model to /v1/responses), so the change
+	// in the request sent is visible rather than silent.
 	Logger *slog.Logger
 
 	// Extensions carries client-level provider-specific options. Use

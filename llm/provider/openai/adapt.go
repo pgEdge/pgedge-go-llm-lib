@@ -91,7 +91,7 @@ func (c *client) classify(rej *rejection) (param, action string) {
 		return adjustMaxTokens, "sent as max_completion_tokens"
 	case rejectsTemperature(rej, e.Param, e.Code):
 		return adjustTemperature, "omitted"
-	case c.requiresResponsesAPI(rej, e.Message):
+	case c.requiresResponsesAPI(rej, e.Param, e.Message):
 		return adjustEndpoint, "routed to /v1/responses"
 	}
 	return "", ""
@@ -116,11 +116,11 @@ func rejectsTemperature(rej *rejection, param, code string) bool {
 // requiresResponsesAPI reports whether Chat Completions refused the
 // model because it is only available through /v1/responses, and the
 // caller has not pinned the endpoint.
-func (c *client) requiresResponsesAPI(rej *rejection, msg string) bool {
-	if rej.responses || (rej.status != 400 && rej.status != 404) {
+func (c *client) requiresResponsesAPI(rej *rejection, param, msg string) bool {
+	if rej.responses || param != "" || (rej.status != 400 && rej.status != 404) {
 		return false
 	}
-	return c.forcedRoute() == nil && strings.Contains(msg, "v1/responses")
+	return c.forcedRoute() == nil && strings.Contains(msg, "only supported in v1/responses")
 }
 
 // learn records an adjustment on the client and logs it at Debug level.

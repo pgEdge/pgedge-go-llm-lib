@@ -47,13 +47,16 @@ func (c *client) omitTemperature() bool {
 }
 
 // adaptToRejection inspects a failed /messages response and reports
-// whether the request should be rebuilt and resent. It only adapts when
-// the request actually carried a temperature and the model rejected it;
-// the client then omits temperature from every later request, since a
-// client is bound to a single model. As the rebuilt request no longer
-// carries a temperature, a caller loops at most once.
-func (c *client) adaptToRejection(status int, body []byte, sentTemperature bool) bool {
-	if status != http.StatusBadRequest || !sentTemperature {
+// whether the request should be rebuilt and resent without temperature.
+// It only adapts when the request actually carried a temperature and the
+// model rejected it. When the request also enabled extended thinking,
+// the rejection may be down to that per-request setting rather than the
+// model, so the caller omits temperature for this call only; otherwise
+// the client omits it from every later request, since a client is bound
+// to a single model. As the resent request carries no temperature, a
+// caller loops at most once.
+func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRequest) bool {
+	if status != http.StatusBadRequest || sent.Temperature == nil {
 		return false
 	}
 	var errResp anthropicErrorResponse
@@ -63,6 +66,11 @@ func (c *client) adaptToRejection(status int, body []byte, sentTemperature bool)
 		return false
 	}
 
+	if sent.Thinking != nil {
+		c.logAdjustment("omitted for this request")
+		return true
+	}
+
 	c.mu.Lock()
 	learned := !c.dropTemperature
 	c.dropTemperature = true
@@ -70,12 +78,19 @@ func (c *client) adaptToRejection(status int, body []byte, sentTemperature bool)
 
 	// Log only the first time, so concurrent calls that all hit the
 	// rejection produce a single record.
-	if learned && c.opts.Logger != nil {
+	if learned {
+		c.logAdjustment("omitted")
+	}
+	return true
+}
+
+// logAdjustment records at Debug level that temperature was dropped.
+func (c *client) logAdjustment(action string) {
+	if c.opts.Logger != nil {
 		c.opts.Logger.Debug("adjusted request after provider rejected a parameter",
 			"provider", providerName,
 			"model", c.model,
 			"param", "temperature",
-			"action", "omitted")
+			"action", action)
 	}
-	return true
 }

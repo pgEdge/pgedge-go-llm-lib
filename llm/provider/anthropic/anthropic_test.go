@@ -1735,7 +1735,7 @@ func temperatureServer(t *testing.T, rejectBody string) (*httptest.Server, func(
 		if hasTemp {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(rejectBody))
+			writeSplit(w, rejectBody)
 			return
 		}
 		if req["stream"] == true {
@@ -1753,6 +1753,17 @@ func temperatureServer(t *testing.T, rejectBody string) (*httptest.Server, func(
 		defer mu.Unlock()
 		return append([]bool(nil), sent...)
 	}
+}
+
+// writeSplit writes body in two flushed halves with a pause between, so
+// the client sees it arrive across more than one read and must read to
+// EOF before parsing it.
+func writeSplit(w http.ResponseWriter, body string) {
+	half := len(body) / 2
+	w.Write([]byte(body[:half]))
+	w.(http.Flusher).Flush()
+	time.Sleep(20 * time.Millisecond)
+	w.Write([]byte(body[half:]))
 }
 
 func newTemperatureClient(t *testing.T, url string, logger *slog.Logger) llm.Client {
@@ -1835,6 +1846,26 @@ func TestChatStreamOmitsRejectedTemperature(t *testing.T) {
 	streamOK(t, c)
 	streamOK(t, c)
 	wantTemperatureSent(t, sent(), true, false, false)
+}
+
+func TestThinkingTemperatureRejectionNotRemembered(t *testing.T) {
+	srv, sent := temperatureServer(t, temperatureDeprecatedBody)
+	c := newTemperatureClient(t, srv.URL, nil)
+
+	// Extended thinking is set per request, so a rejection alongside it
+	// drops temperature for that call only.
+	resp, err := c.Chat(context.Background(), WithExtendedThinking(hiRequest, 8000))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Errorf("expected 'ok', got %+v", resp.Content)
+	}
+	wantTemperatureSent(t, sent(), true, false)
+
+	// A later call without thinking still tries the caller's temperature.
+	chatOK(t, c)
+	wantTemperatureSent(t, sent(), true, false, true, false)
 }
 
 func TestChatTemperatureRangeErrorNotRetried(t *testing.T) {

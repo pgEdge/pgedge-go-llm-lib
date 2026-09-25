@@ -39,7 +39,10 @@ Newer Claude models reject a non-default `temperature` with an
 HTTP 400 error. When the API rejects the temperature that a
 request carried, the provider resends the request once without
 it and omits the temperature from every later request made by
-the same client. Other invalid request errors, such as a
+the same client. If the rejected request enabled extended thinking,
+the temperature is omitted for that request only, since the
+rejection may be down to thinking rather than the model. Other
+invalid request errors, such as a
 temperature outside the permitted range, are returned to the
 caller unchanged.
 

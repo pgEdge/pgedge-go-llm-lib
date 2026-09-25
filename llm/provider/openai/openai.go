@@ -646,9 +646,7 @@ func (c *client) chatStreamCompletions(ctx context.Context, req llm.ChatRequest)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		body := make([]byte, 4096)
-		n, _ := resp.Body.Read(body)
-		return nil, oaiReq.rejection(resp.StatusCode, body[:n]), nil
+		return nil, oaiReq.rejection(resp.StatusCode, httpclient.ReadErrorBody(resp.Body)), nil
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)

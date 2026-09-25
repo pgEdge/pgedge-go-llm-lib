@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
@@ -74,7 +75,7 @@ func adaptServer(t *testing.T, replies ...scriptedReply) (srv *httptest.Server, 
 		if n <= len(replies) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(replies[n-1].status)
-			_, _ = w.Write([]byte(replies[n-1].body))
+			writeSplit(w, replies[n-1].body)
 			return
 		}
 
@@ -100,6 +101,17 @@ func adaptServer(t *testing.T, replies ...scriptedReply) (srv *httptest.Server, 
 		defer mu.Unlock()
 		return append([]recordedRequest(nil), got...)
 	}
+}
+
+// writeSplit writes body in two flushed halves with a pause between, so
+// the client sees it arrive across more than one read and must read to
+// EOF before classifying it.
+func writeSplit(w http.ResponseWriter, body string) {
+	half := len(body) / 2
+	_, _ = w.Write([]byte(body[:half]))
+	w.(http.Flusher).Flush()
+	time.Sleep(20 * time.Millisecond)
+	_, _ = w.Write([]byte(body[half:]))
 }
 
 // newAdaptClient returns a client with a client-default temperature,
@@ -380,6 +392,26 @@ func TestAdapt_UnrelatedRejectionNotRetried(t *testing.T) {
 			t.Errorf("requests = %d, want 1", len(got))
 		}
 	})
+}
+
+func TestAdapt_OtherEndpointMentionNotRerouted(t *testing.T) {
+	// Only OpenAI's responses-only wording, with no param, reroutes; a
+	// message that merely mentions v1/responses does not.
+	for name, body := range map[string]string{
+		"hint":  `{"error":{"message":"Model not found. See v1/responses for newer models.","type":"invalid_request_error","param":null,"code":"model_not_found"}}`,
+		"param": `{"error":{"message":"This model is only supported in v1/responses and not in v1/chat/completions.","type":"invalid_request_error","param":"model","code":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			modes(t, func(t *testing.T, stream bool) {
+				srv, requests := adaptServer(t, scriptedReply{404, body})
+				c := newAdaptClient(t, srv.URL, nil)
+				if _, err := call(t, c, stream, llm.ChatRequest{}); err == nil {
+					t.Fatal("want an error, got success")
+				}
+				wantPaths(t, requests(), "/chat/completions")
+			})
+		})
+	}
 }
 
 func TestAdapt_RejectionOfUnsentParameterNotRetried(t *testing.T) {

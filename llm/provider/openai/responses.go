@@ -433,9 +433,7 @@ func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		buf := make([]byte, 4096)
-		n, _ := resp.Body.Read(buf)
-		return nil, body.rejection(resp.StatusCode, buf[:n]), nil
+		return nil, body.rejection(resp.StatusCode, httpclient.ReadErrorBody(resp.Body)), nil
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)

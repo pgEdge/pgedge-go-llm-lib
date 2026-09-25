@@ -257,8 +257,12 @@ type anthropicUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	dropTemperature := false // this call only; see adaptToRejection
 	for {
 		aReq := c.buildChatRequest(req, false)
+		if dropTemperature {
+			aReq.Temperature = nil
+		}
 
 		var aResp anthropicChatResponse
 		status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
@@ -267,7 +271,8 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 			return nil, err
 		}
 		if status < 200 || status >= 300 {
-			if c.adaptToRejection(status, body, aReq.Temperature != nil) {
+			if c.adaptToRejection(status, body, &aReq) {
+				dropTemperature = true
 				continue
 			}
 			return nil, c.mapError(status, body)
@@ -523,8 +528,12 @@ func (c *client) parseChatResponse(aResp *anthropicChatResponse) *llm.ChatRespon
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
 	var resp *http.Response
+	dropTemperature := false // this call only; see adaptToRejection
 	for {
 		aReq := c.buildChatRequest(req, true)
+		if dropTemperature {
+			aReq.Temperature = nil
+		}
 
 		var err error
 		resp, err = httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
@@ -536,13 +545,13 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 			break
 		}
 
-		body := make([]byte, 4096)
-		n, _ := resp.Body.Read(body)
+		body := httpclient.ReadErrorBody(resp.Body)
 		resp.Body.Close()
-		if c.adaptToRejection(resp.StatusCode, body[:n], aReq.Temperature != nil) {
+		if c.adaptToRejection(resp.StatusCode, body, &aReq) {
+			dropTemperature = true
 			continue
 		}
-		return nil, c.mapError(resp.StatusCode, body[:n])
+		return nil, c.mapError(resp.StatusCode, body)
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)
