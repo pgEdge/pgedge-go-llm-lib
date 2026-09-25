@@ -1044,10 +1044,9 @@ func TestChatStreamWithToolCalls(t *testing.T) {
 	}
 }
 
-func TestMaxCompletionTokensForNewModels(t *testing.T) {
-	// When the ResponsesAPI override is set to false, o1/o3/gpt-5 models
-	// stay on /v1/chat/completions and must use max_completion_tokens
-	// instead of max_tokens.
+func TestMaxTokensNotChosenByModelName(t *testing.T) {
+	// No model name selects max_completion_tokens in advance; the client
+	// sends max_tokens until OpenAI rejects it (see adapt_test.go).
 	for _, model := range []string{"o1-preview", "o3-mini", "gpt-5"} {
 		t.Run(model, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1058,11 +1057,11 @@ func TestMaxCompletionTokensForNewModels(t *testing.T) {
 				var req map[string]any
 				json.Unmarshal(body, &req)
 
-				if _, ok := req["max_tokens"]; ok {
-					t.Error("should not have max_tokens for this model")
+				if _, ok := req["max_tokens"]; !ok {
+					t.Error("expected max_tokens")
 				}
-				if _, ok := req["max_completion_tokens"]; !ok {
-					t.Error("expected max_completion_tokens for this model")
+				if _, ok := req["max_completion_tokens"]; ok {
+					t.Error("max_completion_tokens should not be sent before a rejection")
 				}
 
 				w.Header().Set("Content-Type", "application/json")
@@ -1086,14 +1085,16 @@ func TestMaxCompletionTokensForNewModels(t *testing.T) {
 			defer srv.Close()
 
 			c, _ := New(llm.Options{
-				APIKey:     "test-key",
-				Model:      model,
-				BaseURL:    srv.URL,
-				Extensions: []llm.ProviderExtension{Extension{ResponsesAPI: llm.Bool(false)}},
+				APIKey:  "test-key",
+				Model:   model,
+				BaseURL: srv.URL,
+				Retry:   llm.RetryConfig{Disabled: true},
 			})
-			c.Chat(context.Background(), llm.ChatRequest{
+			if _, err := c.Chat(context.Background(), llm.ChatRequest{
 				Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "Hi"}}}},
-			})
+			}); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
 		})
 	}
 }
