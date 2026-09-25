@@ -35,6 +35,14 @@ The Anthropic provider supports the following features:
 - cumulative token usage tracking with cache metrics
   (`CacheCreationInputTokens`, `CacheReadInputTokens`).
 
+Newer Claude models reject a non-default `temperature` with an
+HTTP 400 error. When the API rejects the temperature that a
+request carried, the provider resends the request once without
+it and omits the temperature from every later request made by
+the same client. Other invalid request errors, such as a
+temperature outside the permitted range, are returned to the
+caller unchanged.
+
 The Anthropic provider does not support embeddings. Calling
 `Embed` or `EmbedBatch` returns an `ErrNotSupported` error.
 
@@ -70,21 +78,31 @@ The OpenAI provider supports the following features:
 - tool and function calling.
 - cumulative token usage tracking.
 
-The provider automatically uses `max_completion_tokens` instead
-of `max_tokens` for models that require the newer parameter.
-These models include those with `o1`, `o3`, or `gpt-5`
-prefixes.
+The provider does not keep a list of models and the request
+shapes they accept. Instead, it sends each request in the
+standard form and adapts when the API rejects part of it. When
+the API returns an error that names a parameter the request
+carried, the provider adjusts the request, resends it, and
+applies the same adjustment to every later request made by the
+same client. The provider makes the following adjustments:
 
-The provider automatically routes requests for `o1`, `o3`, and
-`gpt-5` models to the `/v1/responses` endpoint instead of
-`/v1/chat/completions`, because those models reject the older
-endpoint. The request and response wire shapes are translated
-transparently, so the same `Chat` and `ChatStream` calls work
-unchanged across model families. Override the auto-routing with
+- sends the token limit as `max_completion_tokens` when the
+  model rejects `max_tokens`.
+- omits `temperature` when the model accepts only its own
+  default value.
+- routes the request to the `/v1/responses` endpoint when the
+  model is only available through the Responses API.
+
+Each adjustment costs one extra request the first time a client
+meets it; set `Options.Logger` to record the adjustments at the
+Debug level. The request and response wire shapes for the
+Responses API are translated transparently, so the same `Chat`
+and `ChatStream` calls work unchanged across model families.
+Override the routing with
 `openai.Extension{ResponsesAPI: llm.Bool(true|false)}` on
 `Options.Extensions`: `llm.Bool(true)` forces every call to use
-`/v1/responses`, `llm.Bool(false)` keeps every call on
-`/v1/chat/completions`. The Responses API does not accept stop
+`/v1/responses`, and `llm.Bool(false)` keeps every call on
+`/v1/chat/completions` even when the model rejects it. The Responses API does not accept stop
 sequences, so requests that set `ChatRequest.StopSequences`
 return `llm.ErrNotSupported` when routed there.
 

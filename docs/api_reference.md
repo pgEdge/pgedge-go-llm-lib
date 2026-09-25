@@ -127,6 +127,7 @@ type Options struct {
 | `PerAttemptTimeout` | `0` (off) | Wall-clock cap per attempt; makes slow attempts retryable. Set below `RequestTimeout`. |
 | `Retry`          | 5 retries   | Retry policy. |
 | `OnRetry`        | —           | Observability hook fired before each retry sleep. |
+| `Logger`         | — (silent)  | `*slog.Logger` for diagnostics; records at Debug level each request adjustment a provider makes after the API rejects a parameter. |
 
 `WithDefaults()` returns a copy of `Options` with library
 defaults applied (preserving explicit zero values).
