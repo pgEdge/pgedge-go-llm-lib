@@ -401,15 +401,27 @@ func TestDetailText(t *testing.T) {
 }
 
 func TestDecideReturnsContextError(t *testing.T) {
-	release := make(chan struct{})
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { <-release }, "")
-	// Registered after the server's cleanup, so it runs first and lets
-	// the handler return before the server waits for it.
-	t.Cleanup(func() { close(release) })
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	_, err := c.Decide(ctx, sampleRequest())
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	tests := map[string]bool{"before headers": false, "during body": true}
+	for name, flush := range tests {
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if flush {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"model":`))
+					w.(http.Flusher).Flush()
+				}
+				<-release
+			}, "")
+			// Registered after the server's cleanup, so it runs first
+			// and lets the handler return before the server waits for it.
+			t.Cleanup(func() { close(release) })
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			_, err := c.Decide(ctx, sampleRequest())
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+			}
+		})
 	}
 }

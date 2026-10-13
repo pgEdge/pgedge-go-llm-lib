@@ -218,7 +218,7 @@ func (c *client) Ping(ctx context.Context) error {
 func (c *client) doJSON(ctx context.Context, method, path string, body, out any) error {
 	headers := map[string]string{"Authorization": "Bearer " + c.apiKey}
 	status, respBody, err := httpclient.DoJSON(ctx, c.httpClient, method, c.baseURL+path, headers, body, out)
-	if err != nil && status == 0 && ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		// Return the caller's own cancellation or deadline, so
 		// errors.Is(err, context.DeadlineExceeded) works as it does
 		// on the OpenAI provider.

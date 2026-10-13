@@ -708,7 +708,7 @@ fail before any network call. The error is a `*ProviderError` wrapping
 |---|---|---|
 | `Name` | `string` | The question's `Name`. |
 | `Kind` | `DecisionKind` | The question's `Kind`. |
-| `Refused` | `bool` | True when the provider declined to answer; every field except `Name` and `Kind` is then zero. |
+| `Refused` | `bool` | True when the provider declined to answer; every field except `Name`, `Kind` and `Refused` is then zero. |
 | `Probability` | `float64` | Yes/no: the probability that the answer is yes. |
 | `Choice` | `string` | Choice: the `Value` of the selected option. |
 | `Score` | `float64` | Score: the probability-weighted level index, where 0 is the first (lowest) level. |

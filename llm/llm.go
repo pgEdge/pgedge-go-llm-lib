@@ -76,8 +76,8 @@ type Client interface {
 	Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
 
 	// Decide asks a decision model one or more yes/no, choice or score
-	// questions about an input and returns calibrated probabilities
-	// rather than generated text. Answers are returned in question
+	// questions about an input and returns probabilities rather than
+	// generated text. Answers are returned in question
 	// order. Returns ErrNotSupported for providers without a decision
 	// model (currently every provider except TypeSafe and OpenAI).
 	Decide(ctx context.Context, req DecisionRequest) (*DecisionResponse, error)

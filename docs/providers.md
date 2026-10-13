@@ -278,7 +278,7 @@ vecs, err := client.EmbedMultimodal(ctx, llm.MultimodalEmbedRequest{
 
 TypeSafe provides the Jev decision models, which answer yes/no, choice and
 score questions with calibrated probabilities. It does not provide chat
-completions or embeddings; every method other than `Decide`, `ListModels`,
+completions or embeddings; every request method other than `Decide`, `ListModels`,
 `ListModelsWithMetadata` and `Ping` returns `ErrNotSupported`.
 
 ```go

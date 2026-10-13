@@ -1,7 +1,7 @@
 # Decisions
 
 `Client.Decide` asks a decision model one or more questions about a piece of
-input and returns calibrated probabilities rather than free text. Use it for
+input and returns probabilities rather than free text. Use it for
 classification and triage, where the probability behind an answer matters as
 much as the answer itself: routing an alert, flagging a support ticket, or
 scoring a document against a rubric. For open-ended generation, use `Chat`
@@ -112,7 +112,7 @@ the middle and highest levels.
 ## Refusals
 
 OpenAI may decline to answer an individual question. The answer then has
-`Refused` set to true, and every field other than `Name` and `Kind` is zero.
+`Refused` set to true, and every field other than `Name`, `Kind` and `Refused` is zero.
 Check `Refused` before using an answer. TypeSafe does not refuse questions.
 
 ## Validation and limits
