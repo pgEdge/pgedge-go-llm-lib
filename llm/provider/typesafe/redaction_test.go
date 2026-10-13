@@ -11,6 +11,7 @@ package typesafe
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,6 +95,10 @@ func TestUnparseableErrorBodyIsNotRelayed(t *testing.T) {
 		t.Fatal("expected an error from a 500 response")
 	}
 
+	var pe *llm.ProviderError
+	if !errors.As(err, &pe) || pe.Message != "typesafe: HTTP 500" {
+		t.Errorf("error = %#v, want Message exactly %q", err, "typesafe: HTTP 500")
+	}
 	if strings.Contains(err.Error(), "not json at all") {
 		t.Errorf("an unparseable body was relayed verbatim: %q", err.Error())
 	}
@@ -128,4 +133,24 @@ func assertRedacted(t *testing.T, msg string) {
 	if !strings.Contains(msg, "[REDACTED]") {
 		t.Errorf("no redaction placeholder in the message; this test is no longer exercising the redaction path: %q", msg)
 	}
+}
+
+// TestFullKeyEchoIsRedacted covers a detail that quotes the whole key.
+func TestFullKeyEchoIsRedacted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"detail":"Bad key ` + redactionTestKey + ` rejected"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(llm.Options{APIKey: redactionTestKey, BaseURL: srv.URL, Retry: llm.RetryConfig{Disabled: true}})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	_, err = c.Decide(context.Background(), llm.DecisionRequest{Input: "x", Questions: []llm.DecisionQuestion{{Name: "q", Kind: llm.DecisionYesNo, Instructions: "q?"}}})
+	if err == nil {
+		t.Fatal("expected an error from a 401 response")
+	}
+	assertNoKeyFragments(t, err.Error(), redactionTestKey)
+	assertRedacted(t, err.Error())
 }

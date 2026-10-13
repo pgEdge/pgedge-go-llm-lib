@@ -121,6 +121,13 @@ func TestDecideReordersAnswers(t *testing.T) {
 	if resp.Usage != want || c.Usage() != want {
 		t.Errorf("usage = %+v, cumulative %+v", resp.Usage, c.Usage())
 	}
+	if _, err := c.Decide(context.Background(), sampleRequest()); err != nil {
+		t.Fatalf("second Decide: %v", err)
+	}
+	doubled := llm.TokenUsage{PromptTokens: 200, CompletionTokens: 6, TotalTokens: 206}
+	if c.Usage() != doubled {
+		t.Errorf("cumulative usage after two calls = %+v, want %+v", c.Usage(), doubled)
+	}
 }
 
 func TestDecideModelSelection(t *testing.T) {
@@ -143,17 +150,36 @@ func TestDecideModelSelection(t *testing.T) {
 }
 
 func TestDecideBadResponses(t *testing.T) {
-	tests := map[string]string{
-		"missing answer": `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage","probabilities":{}}},"usage":{}}`,
-		"wrong type":     `{"model":"m","answers":{"urgent":{"type":"choice","choice":"x"},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{}}`,
-		"malformed":      `{"model":`,
+	tests := map[string]struct {
+		body    string
+		leak    string // must not appear in the error message
+		wantTot int
+	}{
+		"missing answer": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage","probabilities":{}}},"usage":{}}`},
+		"wrong type": {body: `{"model":"m","answers":{"urgent":{"type":"bogus-type-xyz","choice":"x"},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			leak: "bogus-type-xyz", wantTot: 9},
+		"choice not in options": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"bogus-choice-xyz"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			leak: "bogus-choice-xyz", wantTot: 9},
+		"malformed": {body: `{"model":"leak-marker-xyz":`, leak: "leak-marker-xyz"},
 	}
-	for name, body := range tests {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }, "")
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(tt.body)) }, "")
 			_, err := c.Decide(context.Background(), sampleRequest())
 			if !errors.Is(err, llm.ErrProviderError) {
 				t.Fatalf("err = %v, want ErrProviderError", err)
+			}
+			if tt.leak != "" && strings.Contains(err.Error(), tt.leak) {
+				t.Errorf("message relays response text: %q", err.Error())
+			}
+			if name == "malformed" {
+				var pe *llm.ProviderError
+				if !errors.As(err, &pe) || pe.StatusCode != 200 {
+					t.Errorf("StatusCode = %+v, want 200", pe)
+				}
+			}
+			if got := c.Usage().TotalTokens; got != tt.wantTot {
+				t.Errorf("Usage().TotalTokens = %d, want %d", got, tt.wantTot)
 			}
 		})
 	}

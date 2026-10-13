@@ -84,6 +84,12 @@ func (c *client) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 	if err := c.doJSON(ctx, http.MethodPost, "/systemone", wire, &raw); err != nil {
 		return nil, err
 	}
+	usage := llm.TokenUsage{
+		PromptTokens:     raw.Usage.InputTokens,
+		CompletionTokens: raw.Usage.OutputTokens,
+		TotalTokens:      raw.Usage.InputTokens + raw.Usage.OutputTokens,
+	}
+	c.addUsage(usage)
 	answers := make([]llm.DecisionAnswer, len(req.Questions))
 	for i, q := range req.Questions {
 		a, err := convertAnswer(q, raw.Answers)
@@ -92,12 +98,6 @@ func (c *client) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 		}
 		answers[i] = a
 	}
-	usage := llm.TokenUsage{
-		PromptTokens:     raw.Usage.InputTokens,
-		CompletionTokens: raw.Usage.OutputTokens,
-		TotalTokens:      raw.Usage.InputTokens + raw.Usage.OutputTokens,
-	}
-	c.addUsage(usage)
 	return &llm.DecisionResponse{Answers: answers, Model: raw.Model, Usage: usage}, nil
 }
 
@@ -156,13 +156,16 @@ func convertAnswer(q llm.DecisionQuestion, answers map[string]wireAnswer) (llm.D
 		return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("response has no answer for question %q", q.Name))
 	}
 	if wa.Type != wireTypes[q.Kind] {
-		return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has type %q, want %q", q.Name, wa.Type, wireTypes[q.Kind]))
+		return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has an unexpected type", q.Name))
 	}
 	a := llm.DecisionAnswer{Name: q.Name, Kind: q.Kind}
 	switch q.Kind {
 	case llm.DecisionYesNo:
 		a.Probability = wa.Noul
 	case llm.DecisionChoice:
+		if !hasOption(q.Options, wa.Choice) {
+			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q is not one of its options", q.Name))
+		}
 		a.Choice, a.Confidence = wa.Choice, wa.Confidence
 		a.Probabilities = make([]llm.OptionProbability, len(q.Options))
 		for i, o := range q.Options {
@@ -178,6 +181,16 @@ func convertAnswer(q llm.DecisionQuestion, answers map[string]wireAnswer) (llm.D
 	return a, nil
 }
 
+func hasOption(opts []llm.DecisionOption, v string) bool {
+	for _, o := range opts {
+		if o.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
+// badResponse never embeds response-supplied text in msg.
 func badResponse(msg string) error {
 	return &llm.ProviderError{Err: llm.ErrProviderError, Message: msg, Provider: providerName}
 }
