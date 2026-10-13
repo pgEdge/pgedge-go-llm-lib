@@ -165,6 +165,12 @@ func TestDecideBadResponses(t *testing.T) {
 			wantTot: 9},
 		"negative score": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":-0.1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
 			wantTot: 9},
+		"missing probability": {body: `{"model":"m","answers":{"urgent":{"type":"noul"},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			wantTot: 9},
+		"probability out of range": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":7.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			wantTot: 9},
+		"missing score": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score"}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			wantTot: 9},
 		"malformed": {body: `{"model":"leak-marker-xyz":`, leak: "leak-marker-xyz"},
 	}
 	for name, tt := range tests {
@@ -391,5 +397,19 @@ func TestDetailText(t *testing.T) {
 		if got := detailText(json.RawMessage(raw)); got != want {
 			t.Errorf("detailText(%s) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+func TestDecideReturnsContextError(t *testing.T) {
+	release := make(chan struct{})
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { <-release }, "")
+	// Registered after the server's cleanup, so it runs first and lets
+	// the handler return before the server waits for it.
+	t.Cleanup(func() { close(release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := c.Decide(ctx, sampleRequest())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 }

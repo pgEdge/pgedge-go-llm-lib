@@ -52,9 +52,9 @@ type decideResponse struct {
 
 type wireAnswer struct {
 	Type          string             `json:"type"`
-	Noul          float64            `json:"noul"`
+	Noul          *float64           `json:"noul"`
 	Choice        string             `json:"choice"`
-	Score         float64            `json:"score"`
+	Score         *float64           `json:"score"`
 	Confidence    float64            `json:"confidence"`
 	Probabilities map[string]float64 `json:"probabilities"`
 }
@@ -161,7 +161,10 @@ func convertAnswer(q llm.DecisionQuestion, answers map[string]wireAnswer) (llm.D
 	a := llm.DecisionAnswer{Name: q.Name, Kind: q.Kind}
 	switch q.Kind {
 	case llm.DecisionYesNo:
-		a.Probability = wa.Noul
+		if !isProbability(wa.Noul) {
+			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has a missing or out-of-range probability", q.Name))
+		}
+		a.Probability = *wa.Noul
 	case llm.DecisionChoice:
 		if !hasOption(q.Options, wa.Choice) {
 			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q is not one of its options", q.Name))
@@ -172,10 +175,10 @@ func convertAnswer(q llm.DecisionQuestion, answers map[string]wireAnswer) (llm.D
 			a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: wa.Probabilities[o.Value]}
 		}
 	case llm.DecisionScore:
-		if wa.Score < 0 || wa.Score > float64(len(q.Options)-1) {
-			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has an out-of-range score", q.Name))
+		if !isScore(wa.Score, len(q.Options)) {
+			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has a missing or out-of-range score", q.Name))
 		}
-		a.Score, a.Confidence = wa.Score, wa.Confidence
+		a.Score, a.Confidence = *wa.Score, wa.Confidence
 		a.Probabilities = make([]llm.OptionProbability, len(q.Options))
 		for i, o := range q.Options {
 			a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: wa.Probabilities[strconv.Itoa(i)]}
@@ -196,4 +199,16 @@ func hasOption(opts []llm.DecisionOption, v string) bool {
 // badResponse never embeds response-supplied text in msg.
 func badResponse(msg string) error {
 	return &llm.ProviderError{Err: llm.ErrProviderError, Message: msg, Provider: providerName}
+}
+
+// isProbability reports whether p was present in the response and lies
+// in [0, 1], so a renamed or missing field cannot read as a firm "no".
+func isProbability(p *float64) bool {
+	return p != nil && *p >= 0 && *p <= 1
+}
+
+// isScore reports whether s was present and lies within the zero-based
+// level indexes of a question with the given number of levels.
+func isScore(s *float64, levels int) bool {
+	return s != nil && *s >= 0 && *s <= float64(levels-1)
 }

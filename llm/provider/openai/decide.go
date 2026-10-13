@@ -74,9 +74,9 @@ type decisionResponseWire struct {
 type decisionAnswerWire struct {
 	Type          string                    `json:"type"`
 	Name          string                    `json:"name"`
-	Probability   float64                   `json:"probability"`
+	Probability   *float64                  `json:"probability"`
 	Choice        json.RawMessage           `json:"choice"`
-	Score         float64                   `json:"score"`
+	Score         *float64                  `json:"score"`
 	Confidence    float64                   `json:"confidence"`
 	Probabilities []decisionProbabilityWire `json:"probabilities"`
 }
@@ -205,7 +205,10 @@ func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAns
 	}
 	switch q.Kind {
 	case llm.DecisionYesNo:
-		a.Probability = wa.Probability
+		if !isProbability(wa.Probability) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range probability", q.Name))
+		}
+		a.Probability = *wa.Probability
 	case llm.DecisionChoice:
 		if err := json.Unmarshal(wa.Choice, &a.Choice); err != nil {
 			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a non-string choice", q.Name))
@@ -223,10 +226,10 @@ func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAns
 		}
 		a.Probabilities = orderedProbabilities(q.Options, probs)
 	case llm.DecisionScore:
-		if wa.Score < 0 || wa.Score > float64(len(q.Options)-1) {
-			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has an out-of-range score", q.Name))
+		if !isScore(wa.Score, len(q.Options)) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range score", q.Name))
 		}
-		a.Score, a.Confidence = wa.Score, wa.Confidence
+		a.Score, a.Confidence = *wa.Score, wa.Confidence
 		// Levels are matched by their integer index (the value
 		// field), not by label, so a label the service re-cases or
 		// rewords cannot misplace a probability.
@@ -262,4 +265,16 @@ func orderedProbabilities(options []llm.DecisionOption, probs map[string]float64
 
 func decisionResponseError(msg string) error {
 	return &llm.ProviderError{Err: llm.ErrProviderError, Message: msg, Provider: providerName}
+}
+
+// isProbability reports whether p was present in the response and lies
+// in [0, 1], so a renamed or missing field cannot read as a firm "no".
+func isProbability(p *float64) bool {
+	return p != nil && *p >= 0 && *p <= 1
+}
+
+// isScore reports whether s was present and lies within the zero-based
+// level indexes of a question with the given number of levels.
+func isScore(s *float64, levels int) bool {
+	return s != nil && *s >= 0 && *s <= float64(levels-1)
 }

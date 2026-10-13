@@ -199,8 +199,11 @@ func TestDecideBadResponses(t *testing.T) {
 		{"non-string choice", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":true},{"type":"refusal","name":"severity"}],"usage":{}}`, "non-string choice"},
 		{"choice not in options", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"other"},{"type":"refusal","name":"severity"}],"usage":{}}`, "not one of its options"},
 		{"duplicate answer", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"predicate","name":"urgent","probability":0.5},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "more than one answer for question"},
-		{"score out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":2.5,"confidence":1,"probabilities":[]}],"usage":{}}`, "out-of-range score"},
-		{"negative score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":-0.1,"confidence":1,"probabilities":[]}],"usage":{}}`, "out-of-range score"},
+		{"score out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":2.5,"confidence":1,"probabilities":[]}],"usage":{}}`, "missing or out-of-range score"},
+		{"negative score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":-0.1,"confidence":1,"probabilities":[]}],"usage":{}}`, "missing or out-of-range score"},
+		{"missing probability", `{"model":"m","answers":[{"type":"predicate","name":"urgent"},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range probability"},
+		{"probability out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":7.5},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range probability"},
+		{"missing score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","confidence":1,"probabilities":[]}],"usage":{}}`, "missing or out-of-range score"},
 		{"malformed", `{"model":`, "could not be decoded"},
 	}
 	for _, tt := range tests {

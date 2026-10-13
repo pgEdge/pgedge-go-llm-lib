@@ -657,3 +657,11 @@ func TestCatalogueEmbeddingDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestDecideUnsupported(t *testing.T) {
+	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	_, err := c.Decide(context.Background(), llm.DecisionRequest{})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}
