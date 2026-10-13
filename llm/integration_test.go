@@ -12,6 +12,7 @@ package llm_test
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"testing"
 
@@ -234,6 +235,15 @@ func decideSample(t *testing.T, c llm.Client) {
 		case llm.DecisionScore:
 			if a.Score < 0 || a.Score > 2 || len(a.Probabilities) != 3 {
 				t.Errorf("%s: %+v", name, a)
+				break
+			}
+			var w float64
+			for j, p := range a.Probabilities {
+				w += float64(j) * p.Probability
+			}
+			t.Logf("%s: score=%v probabilities=%+v", name, a.Score, a.Probabilities)
+			if math.Abs(a.Score-w) > 0.05 {
+				t.Errorf("%s: score %v differs from probability-weighted index %v", name, a.Score, w)
 			}
 		}
 	}

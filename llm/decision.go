@@ -71,7 +71,8 @@ type DecisionRequest struct {
 	Images []ImageContent
 	// Questions to answer; at least one.
 	Questions []DecisionQuestion
-	// Extensions carries provider-specific options.
+	// Extensions carries provider-specific options. No built-in
+	// provider reads it yet.
 	Extensions []ProviderExtension
 }
 
@@ -99,7 +100,8 @@ type DecisionAnswer struct {
 	// option.
 	Choice string
 	// Score is, for a score question, the probability-weighted level
-	// index, where 0 is the first (lowest) level.
+	// index, where 0 is the first (lowest) level. Both the TypeSafe
+	// and OpenAI providers return it this way.
 	Score float64
 	// Confidence is the provider's confidence in Choice or Score.
 	Confidence float64

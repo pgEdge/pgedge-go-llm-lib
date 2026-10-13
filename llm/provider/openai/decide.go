@@ -224,9 +224,16 @@ func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAns
 		a.Probabilities = orderedProbabilities(q.Options, probs)
 	case llm.DecisionScore:
 		a.Score, a.Confidence = wa.Score, wa.Confidence
+		// Levels are matched by their integer index (the value
+		// field), not by label, so a label the service re-cases or
+		// rewords cannot misplace a probability.
 		probs := make(map[string]float64, len(wa.Probabilities))
 		for _, p := range wa.Probabilities {
-			probs[p.Label] = p.Probability
+			var idx int
+			if json.Unmarshal(p.Value, &idx) != nil || idx < 0 || idx >= len(q.Options) {
+				continue
+			}
+			probs[q.Options[idx].Value] = p.Probability
 		}
 		a.Probabilities = orderedProbabilities(q.Options, probs)
 	}

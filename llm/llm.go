@@ -9,7 +9,8 @@
 
 // Package llm provides a unified Go interface to multiple
 // large-language-model and embedding/rerank providers (Anthropic,
-// OpenAI, Gemini, Ollama, TypeSafe, Voyage) through a single Client interface.
+// OpenAI, Gemini, Ollama, TypeSafe, Voyage) through a single Client
+// interface.
 //
 // Provider packages register themselves at import time via init().
 // Import the convenience package llm/all (for all six built-in
@@ -42,8 +43,8 @@ import (
 )
 
 // Client is the unified interface for interacting with LLM providers.
-// All six built-in providers (Anthropic, OpenAI, Gemini, Ollama, TypeSafe, Voyage)
-// implement this interface.
+// All six built-in providers (Anthropic, OpenAI, Gemini, Ollama,
+// TypeSafe, Voyage) implement this interface.
 //
 // Create a Client with NewClient; import provider packages (or
 // llm/all) to register them.

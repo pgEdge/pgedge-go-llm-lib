@@ -4,7 +4,7 @@
 [![CI - Docs](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-docs.yml/badge.svg)](https://github.com/pgEdge/pgedge-go-llm-lib/actions/workflows/ci-docs.yml)
 
 pgEdge Go LLM Library is a unified Go interface for Anthropic, OpenAI,
-Gemini, and Ollama. It includes an HTTP proxy package, production-grade
+Gemini, Ollama, Voyage, and TypeSafe. It includes an HTTP proxy package, production-grade
 retry with exponential back-off, per-request timeouts, observability
 hooks, and zero external dependencies.
 
@@ -74,6 +74,7 @@ or import individual provider packages to keep binary size small:
 import (
     _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/anthropic"
     _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+    _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/typesafe"
     _ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
 )
 ```

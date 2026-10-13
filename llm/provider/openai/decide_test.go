@@ -59,6 +59,29 @@ const decideResponseBody = `{
   "usage": {"input_tokens": 100, "output_tokens": 3, "total_tokens": 103}
 }`
 
+func TestDecideScoreMatchesByIndex(t *testing.T) {
+	body := `{"model":"m","answers":[{"type":"score","name":"severity","score":1,"confidence":1,
+"probabilities":[{"value":0,"label":"LOW","probability":0.1},{"value":1,"label":"Medium!","probability":0.8},{"value":2,"label":"x","probability":0.1},{"value":7,"label":"low","probability":0.9},{"value":-1,"label":"high","probability":0.9}]}],"usage":{}}`
+	c := newDecideClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	})
+	resp, err := c.Decide(context.Background(), llm.DecisionRequest{
+		Input: "x",
+		Questions: []llm.DecisionQuestion{{Name: "severity", Kind: llm.DecisionScore, Instructions: "How severe?",
+			Options: []llm.DecisionOption{{Value: "low"}, {Value: "medium"}, {Value: "high"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resp.Answers[0].Probabilities
+	want := []llm.OptionProbability{{Value: "low", Probability: 0.1}, {Value: "medium", Probability: 0.8}, {Value: "high", Probability: 0.1}}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("probabilities = %+v, want %+v", got, want)
+		}
+	}
+}
+
 func TestDecideRequestShape(t *testing.T) {
 	var got, path string
 	c := newDecideClient(t, func(w http.ResponseWriter, r *http.Request) {
