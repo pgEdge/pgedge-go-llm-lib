@@ -62,6 +62,7 @@ nav:
       - Streaming: streaming.md
       - Embeddings: embeddings.md
       - Reranking: reranking.md
+      - Decisions: decisions.md
       - Tool Calling: tool_calling.md
       - Error Handling: error_handling.md
 

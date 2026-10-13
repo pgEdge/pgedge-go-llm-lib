@@ -192,6 +192,74 @@ func TestIntegrationAnthropic(t *testing.T) {
 	helloChat(t, c)
 }
 
+// decideSample exercises Decide with one question of each kind and
+// checks the answers are well-formed. Decision models are
+// probabilistic, so only shapes and ranges are asserted.
+func decideSample(t *testing.T, c llm.Client) {
+	t.Helper()
+	resp, err := c.Decide(context.Background(), llm.DecisionRequest{
+		Input: "Alert: replication lag on the standby has grown from 2 seconds to 45 seconds over ten minutes and is still rising.",
+		Questions: []llm.DecisionQuestion{
+			{Name: "urgent", Kind: llm.DecisionYesNo, Instructions: "Does this need attention within the hour?"},
+			{Name: "category", Kind: llm.DecisionChoice, Instructions: "Which area does this alert concern?",
+				Options: []llm.DecisionOption{{Value: "replication"}, {Value: "storage"}, {Value: "connections"}}},
+			{Name: "severity", Kind: llm.DecisionScore, Instructions: "How severe is this?",
+				Options: []llm.DecisionOption{{Value: "low"}, {Value: "medium"}, {Value: "high"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if len(resp.Answers) != 3 {
+		t.Fatalf("got %d answers, want 3", len(resp.Answers))
+	}
+	for i, name := range []string{"urgent", "category", "severity"} {
+		a := resp.Answers[i]
+		if a.Name != name {
+			t.Fatalf("answer %d is %q, want %q", i, a.Name, name)
+		}
+		if a.Refused {
+			t.Logf("question %q was refused", name)
+			continue
+		}
+		switch a.Kind {
+		case llm.DecisionYesNo:
+			if a.Probability < 0 || a.Probability > 1 {
+				t.Errorf("%s: probability %v out of range", name, a.Probability)
+			}
+		case llm.DecisionChoice:
+			if a.Choice == "" || len(a.Probabilities) != 3 {
+				t.Errorf("%s: %+v", name, a)
+			}
+		case llm.DecisionScore:
+			if a.Score < 0 || a.Score > 2 || len(a.Probabilities) != 3 {
+				t.Errorf("%s: %+v", name, a)
+			}
+		}
+	}
+	if resp.Usage.PromptTokens == 0 {
+		t.Errorf("expected non-zero prompt tokens, got %+v", resp.Usage)
+	}
+}
+
+func TestIntegrationTypeSafe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	key := os.Getenv("TYPESAFE_API_KEY")
+	if key == "" {
+		t.Skip("TYPESAFE_API_KEY not set; skipping TypeSafe integration test")
+	}
+	c, err := llm.NewClient("typesafe", llm.Options{APIKey: key, Model: pickModel("TYPESAFE_MODEL", "jev-latest")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	decideSample(t, c)
+}
+
 func TestIntegrationOpenAI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in -short mode")
@@ -217,6 +285,9 @@ func TestIntegrationOpenAI(t *testing.T) {
 		t.Fatal(err)
 	}
 	helloEmbed(t, embedClient)
+
+	// Decide ignores Options.Model and uses gpt-6-luna.
+	decideSample(t, chatClient)
 }
 
 func TestIntegrationGemini(t *testing.T) {

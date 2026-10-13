@@ -14,6 +14,7 @@ pgEdge Go LLM Library supports the following features:
 - chat completions through a unified request and response format.
 - streaming responses via server-sent events for real-time output.
 - text embeddings for supported providers.
+- decision models that answer yes/no, choice and score questions with probabilities.
 - tool and function calling with JSON schema definitions.
 - multimodal image input (inline base64 and URL).
 - document input (PDFs and other formats supported by the provider) inline or by URL.
@@ -32,17 +33,18 @@ pgEdge Go LLM Library supports the following features:
 The following table describes the providers that pgEdge Go LLM
 Library supports and the features available for each provider:
 
-| Feature             | Anthropic | OpenAI | Gemini | Ollama |
-|---------------------|-----------|--------|--------|--------|
-| Chat                | Yes       | Yes    | Yes    | Yes    |
-| Streaming           | Yes       | Yes    | Yes    | Yes    |
-| Embeddings          | No        | Yes    | Yes    | Yes    |
-| Tool Calling        | Yes       | Yes    | Yes    | Yes*   |
-| Multimodal Images   | Yes       | Yes    | Yes    | No†    |
-| Documents (PDFs)    | Yes       | No‡    | Yes    | No‡    |
-| JSON Mode           | Yes       | Yes    | Yes    | Yes    |
-| Prompt Caching      | Yes       | No     | No     | No     |
-| Token Tracking      | Yes       | Yes    | Yes    | Yes    |
+| Feature             | Anthropic | OpenAI | Gemini | Ollama | TypeSafe |
+|---------------------|-----------|--------|--------|--------|----------|
+| Chat                | Yes       | Yes    | Yes    | Yes    | No       |
+| Streaming           | Yes       | Yes    | Yes    | Yes    | No       |
+| Embeddings          | No        | Yes    | Yes    | Yes    | No       |
+| Tool Calling        | Yes       | Yes    | Yes    | Yes*   | No       |
+| Multimodal Images   | Yes       | Yes    | Yes    | No†    | No       |
+| Documents (PDFs)    | Yes       | No‡    | Yes    | No‡    | No       |
+| JSON Mode           | Yes       | Yes    | Yes    | Yes    | No       |
+| Decision Models     | No        | Yes    | No     | No     | Yes      |
+| Prompt Caching      | Yes       | No     | No     | No     | No       |
+| Token Tracking      | Yes       | Yes    | Yes    | Yes    | Yes      |
 
 \* Ollama tool calling is implemented via text-based parsing; results vary by model.  
 † Ollama rejects URL images; inline base64 may work with vision-capable models.  

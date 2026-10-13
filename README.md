@@ -67,7 +67,7 @@ func main() {
 }
 ```
 
-Import all five providers at once with `_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"`,
+Import all six providers at once with `_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"`,
 or import individual provider packages to keep binary size small:
 
 ```go
@@ -450,7 +450,7 @@ dashboards and circuit breakers.
 
 ```go
 // List all registered providers (sorted)
-names := llm.RegisteredProviders() // []string{"anthropic","gemini","ollama","openai","voyage"}
+names := llm.RegisteredProviders() // []string{"anthropic","gemini","ollama","openai","typesafe","voyage"}
 
 // Check connectivity
 if err := client.Ping(ctx); err != nil {
@@ -617,18 +617,19 @@ proxy.Config{
 
 ## Supported Providers
 
-| Feature               | Anthropic | OpenAI | Gemini | Ollama | Voyage |
-|-----------------------|-----------|--------|--------|--------|--------|
-| Chat                  | Yes       | Yes    | Yes    | Yes    | No     |
-| Streaming             | Yes       | Yes    | Yes    | Yes    | No     |
-| Embeddings            | No        | Yes    | Yes    | Yes    | Yes    |
-| Multimodal Embeddings | No        | No     | No     | No     | Yes    |
-| Reranking             | No        | No     | No     | No     | Yes    |
-| Tool Calling          | Yes       | Yes    | Yes    | Yes*   | No     |
-| Multimodal Images     | Yes       | Yes    | Yes    | No†    | (via multimodal embed) |
-| JSON Mode             | Yes       | Yes    | Yes    | Yes    | No     |
-| Prompt Caching        | Yes       | No     | No     | No     | No     |
-| Token Tracking        | Yes       | Yes    | Yes    | Yes    | Yes    |
+| Feature               | Anthropic | OpenAI | Gemini | Ollama | Voyage | TypeSafe |
+|-----------------------|-----------|--------|--------|--------|--------|----------|
+| Chat                  | Yes       | Yes    | Yes    | Yes    | No     | No       |
+| Streaming             | Yes       | Yes    | Yes    | Yes    | No     | No       |
+| Embeddings            | No        | Yes    | Yes    | Yes    | Yes    | No       |
+| Multimodal Embeddings | No        | No     | No     | No     | Yes    | No       |
+| Reranking             | No        | No     | No     | No     | Yes    | No       |
+| Decision Models       | No        | Yes    | No     | No     | No     | Yes      |
+| Tool Calling          | Yes       | Yes    | Yes    | Yes*   | No     | No       |
+| Multimodal Images     | Yes       | Yes    | Yes    | No†    | (via multimodal embed) | No       |
+| JSON Mode             | Yes       | Yes    | Yes    | Yes    | No     | No       |
+| Prompt Caching        | Yes       | No     | No     | No     | No     | No       |
+| Token Tracking        | Yes       | Yes    | Yes    | Yes    | Yes    | Yes      |
 
 \* Ollama tool calling is implemented via text-based parsing; results vary by model.  
 † Ollama rejects URL images; inline base64 may work with vision-capable models.  
@@ -644,6 +645,7 @@ Full reference documentation is in the [`docs/`](docs/) directory:
 - [Streaming](docs/streaming.md)
 - [Tool Calling](docs/tool_calling.md)
 - [Embeddings](docs/embeddings.md)
+- [Decisions](docs/decisions.md)
 - [Error Handling](docs/error_handling.md)
 - [API Reference](docs/api_reference.md)
 - [Troubleshooting](docs/troubleshooting.md)

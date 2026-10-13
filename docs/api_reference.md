@@ -42,6 +42,7 @@ type Client interface {
 | `Embed`                  | Generate an embedding for a text string. |
 | `EmbedBatch`             | Generate embeddings for multiple texts. |
 | `Rerank`                 | Reorder documents by relevance to a query. |
+| `Decide`                 | Ask a decision model questions and get probabilities back. |
 | `EmbedMultimodal`        | Generate embeddings for multimodal (text + images) inputs. |
 | `ListModels`             | List available model names from the provider. |
 | `ListModelsWithMetadata` | List models with capability and limit metadata. |
@@ -636,6 +637,100 @@ not mutate them from inside a hook.
 
 See the README and [proxy godoc](https://pkg.go.dev/github.com/pgEdge/pgedge-go-llm-lib/llm/proxy)
 for `ErrorInfo`, `HealthResponse`, and the SSE wire format.
+
+---
+
+## Decisions
+
+### `Client.Decide(ctx, DecisionRequest) (*DecisionResponse, error)`
+
+Asks a decision model one or more questions about the same input and returns
+one answer per question, in request order. Returns `ErrNotSupported` on
+providers that don't support decision models. Supported by the `typesafe` and
+`openai` providers; see [Decisions](decisions.md).
+
+### `DecisionKind`
+
+A string type naming the shape of a question.
+
+- `DecisionYesNo` (`"yes_no"`): the answer is the probability that the
+  statement is true.
+- `DecisionChoice` (`"choice"`): the model picks one of the options.
+- `DecisionScore` (`"score"`): the model rates on an ordered scale of levels,
+  lowest first.
+
+`MaxDecisionChoices` (255) is the largest number of options a choice question
+may carry.
+
+### `DecisionOption`
+
+| Field | Type | Description |
+|---|---|---|
+| `Value` | `string` | The option returned when chosen (choice), or the level's label (score). Required and unique within the question. |
+| `Description` | `string` | Optionally tells the model what the option means. |
+
+### `DecisionQuestion`
+
+| Field | Type | Description |
+|---|---|---|
+| `Name` | `string` | Identifies the question and its answer. Required and unique within the request. |
+| `Kind` | `DecisionKind` | Selects the question type. |
+| `Instructions` | `string` | The question put to the model. Required. |
+| `Options` | `[]DecisionOption` | Options of a choice question (2 to `MaxDecisionChoices`) or levels of a score question (at least 2, lowest first). Must be empty for a yes/no question. |
+
+### `DecisionRequest`
+
+| Field | Type | Description |
+|---|---|---|
+| `Model` | `string` | Overrides the default decision model for this request. |
+| `Input` | `string` | The text the questions are about. Required unless `Images` is set. |
+| `Images` | `[]ImageContent` | Optional images. Providers that don't accept images return `ErrNotSupported`. |
+| `Questions` | `[]DecisionQuestion` | At least one question. |
+| `Extensions` | `[]ProviderExtension` | Provider-specific options. |
+
+### `DecisionRequest.Validate() error`
+
+Checks the request for errors that every provider would reject, so that they
+fail before any network call. The error is a `*ProviderError` wrapping
+`ErrInvalidRequest`, with `Provider` unset; providers fill it in.
+
+### `OptionProbability`
+
+| Field | Type | Description |
+|---|---|---|
+| `Value` | `string` | The option's `Value` (choice) or the level's label (score). |
+| `Probability` | `float64` | The probability the model assigned to the option. |
+
+### `DecisionAnswer`
+
+| Field | Type | Description |
+|---|---|---|
+| `Name` | `string` | The question's `Name`. |
+| `Kind` | `DecisionKind` | The question's `Kind`. |
+| `Refused` | `bool` | True when the provider declined to answer; every field except `Name` and `Kind` is then zero. |
+| `Probability` | `float64` | Yes/no: the probability that the answer is yes. |
+| `Choice` | `string` | Choice: the `Value` of the selected option. |
+| `Score` | `float64` | Score: the probability-weighted level index, where 0 is the first (lowest) level. |
+| `Confidence` | `float64` | The provider's confidence in `Choice` or `Score`. |
+| `Probabilities` | `[]OptionProbability` | Choice and score: the probability of each option, in request order. |
+
+### `DecisionResponse`
+
+| Field | Type | Description |
+|---|---|---|
+| `Answers` | `[]DecisionAnswer` | One answer per question, in request order. |
+| `Model` | `string` | The model the provider reports having used. |
+| `Usage` | `TokenUsage` | Token usage for this request. |
+
+### `DecisionResponse.Answer(name string) (DecisionAnswer, bool)`
+
+Returns the answer to the named question, and false when there is none. Safe
+to call on a nil response.
+
+### `ModelCapabilityDecisions`
+
+The `ModelCapability` (`"decisions"`) reported for models that support
+`Decide`, for use with `WithCapabilities`.
 
 ---
 
