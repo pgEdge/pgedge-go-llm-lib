@@ -851,16 +851,6 @@ func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResp
 	}
 }
 
-// ---------- Decide ----------
-
-func (c *client) Decide(_ context.Context, _ llm.DecisionRequest) (*llm.DecisionResponse, error) {
-	return nil, &llm.ProviderError{
-		Err:      llm.ErrNotSupported,
-		Message:  "OpenAI does not support decision models",
-		Provider: "openai",
-	}
-}
-
 // ---------- EmbedMultimodal ----------
 
 func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
@@ -931,6 +921,7 @@ func shouldFilterModel(id string) bool {
 
 var openaiModelCapabilities = map[string][]llm.ModelCapability{
 	"gpt-4o":          {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityVision, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
+	"gpt-6-luna":      {llm.ModelCapabilityChat, llm.ModelCapabilityStreaming, llm.ModelCapabilityDecisions},
 	"gpt-4o-mini":     {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityVision, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"gpt-4-turbo":     {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityVision, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"gpt-4":           {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
@@ -1045,7 +1036,7 @@ func (c *client) mapError(status int, body []byte) error {
 		sentinel = llm.ErrAuthentication
 	case status == 429:
 		sentinel = llm.ErrRateLimit
-	case status == 400:
+	case status == 400 || status == 422:
 		sentinel = llm.ErrInvalidRequest
 	default:
 		sentinel = llm.ErrProviderError
