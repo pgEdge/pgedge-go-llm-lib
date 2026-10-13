@@ -690,6 +690,7 @@ const (
 	ModelCapabilityStreaming            ModelCapability = "streaming"
 	ModelCapabilityMultimodalEmbeddings ModelCapability = "multimodal_embeddings"
 	ModelCapabilityReranking            ModelCapability = "reranking"
+	ModelCapabilityDecisions            ModelCapability = "decisions"
 )
 
 // MultimodalContentType identifies the kind of content in a

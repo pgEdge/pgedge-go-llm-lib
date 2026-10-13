@@ -9,10 +9,10 @@
 
 // Package llm provides a unified Go interface to multiple
 // large-language-model and embedding/rerank providers (Anthropic,
-// OpenAI, Gemini, Ollama, Voyage) through a single Client interface.
+// OpenAI, Gemini, Ollama, TypeSafe, Voyage) through a single Client interface.
 //
 // Provider packages register themselves at import time via init().
-// Import the convenience package llm/all (for all five built-in
+// Import the convenience package llm/all (for all six built-in
 // providers) or individual provider packages, then call NewClient.
 //
 // The Client surface covers:
@@ -20,6 +20,7 @@
 //   - Text embeddings (Embed, EmbedBatch)
 //   - Multimodal embeddings (EmbedMultimodal)
 //   - Reranking (Rerank)
+//   - Decision models (Decide)
 //   - Model discovery with capability filtering (ListModels,
 //     ListModelsWithMetadata, WithCapabilities)
 //   - Connectivity check (Ping) and token-usage tracking (Usage)
@@ -41,7 +42,7 @@ import (
 )
 
 // Client is the unified interface for interacting with LLM providers.
-// All five built-in providers (Anthropic, OpenAI, Gemini, Ollama, Voyage)
+// All six built-in providers (Anthropic, OpenAI, Gemini, Ollama, TypeSafe, Voyage)
 // implement this interface.
 //
 // Create a Client with NewClient; import provider packages (or
@@ -72,6 +73,13 @@ type Client interface {
 	// ErrNotSupported for providers that do not support reranking
 	// (currently every provider except Voyage).
 	Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
+
+	// Decide asks a decision model one or more yes/no, choice or score
+	// questions about an input and returns calibrated probabilities
+	// rather than generated text. Answers are returned in question
+	// order. Returns ErrNotSupported for providers without a decision
+	// model (currently every provider except TypeSafe and OpenAI).
+	Decide(ctx context.Context, req DecisionRequest) (*DecisionResponse, error)
 
 	// EmbedMultimodal generates embedding vectors for multimodal inputs
 	// (text and/or images). Returns ErrNotSupported for providers that
