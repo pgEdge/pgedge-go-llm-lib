@@ -921,13 +921,13 @@ func shouldFilterModel(id string) bool {
 
 var openaiModelCapabilities = map[string][]llm.ModelCapability{
 	"gpt-4o":          {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityVision, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
-	"gpt-6-luna":      {llm.ModelCapabilityChat, llm.ModelCapabilityStreaming, llm.ModelCapabilityDecisions},
 	"gpt-4o-mini":     {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityVision, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"gpt-4-turbo":     {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityVision, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"gpt-4":           {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"gpt-3.5-turbo":   {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"o1":              {llm.ModelCapabilityChat, llm.ModelCapabilityStreaming},
 	"text-embedding-": {llm.ModelCapabilityEmbeddings},
+	"gpt-6-luna":      {llm.ModelCapabilityChat, llm.ModelCapabilityStreaming, llm.ModelCapabilityDecisions},
 }
 
 func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {

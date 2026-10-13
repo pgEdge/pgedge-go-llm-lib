@@ -139,6 +139,14 @@ func (r DecisionRequest) Validate() error {
 	if r.Input == "" && len(r.Images) == 0 {
 		return invalidDecision("decision request needs Input or Images")
 	}
+	for i, img := range r.Images {
+		if (img.URL == "") == (len(img.Data) == 0) {
+			return invalidDecision(fmt.Sprintf("image %d must set exactly one of URL or Data", i))
+		}
+		if len(img.Data) > 0 && img.MediaType == "" {
+			return invalidDecision(fmt.Sprintf("image %d has Data but no MediaType", i))
+		}
+	}
 	if len(r.Questions) == 0 {
 		return invalidDecision("decision request needs at least one question")
 	}

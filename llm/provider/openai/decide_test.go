@@ -170,17 +170,23 @@ func TestDecideRefusal(t *testing.T) {
 }
 
 func TestDecideBadResponses(t *testing.T) {
-	tests := map[string]string{
-		"missing answer":    `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4}],"usage":{}}`,
-		"wrong type":        `{"model":"m","answers":[{"type":"choice","name":"urgent","choice":"x"},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`,
-		"non-string choice": `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":true},{"type":"refusal","name":"severity"}],"usage":{}}`,
-		"malformed":         `{"model":`,
+	tests := []struct{ name, body, want string }{
+		{"missing answer", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4}],"usage":{}}`, "has no answer for question"},
+		{"wrong type", `{"model":"m","answers":[{"type":"choice","name":"urgent","choice":"x"},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "unexpected type"},
+		{"non-string choice", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":true},{"type":"refusal","name":"severity"}],"usage":{}}`, "non-string choice"},
+		{"choice not in options", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"other"},{"type":"refusal","name":"severity"}],"usage":{}}`, "not one of its options"},
+		{"duplicate answer", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"predicate","name":"urgent","probability":0.5},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "more than one answer for question"},
+		{"malformed", `{"model":`, "could not be decoded"},
 	}
-	for name, body := range tests {
-		t.Run(name, func(t *testing.T) {
-			c := newDecideClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
-			if _, err := c.Decide(context.Background(), decideRequest()); !errors.Is(err, llm.ErrProviderError) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newDecideClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(tt.body)) })
+			_, err := c.Decide(context.Background(), decideRequest())
+			if !errors.Is(err, llm.ErrProviderError) {
 				t.Fatalf("err = %v, want ErrProviderError", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}
 		})
 	}

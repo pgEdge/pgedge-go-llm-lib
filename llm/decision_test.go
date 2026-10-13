@@ -40,6 +40,15 @@ func TestDecisionRequestValidateAcceptsValid(t *testing.T) {
 	}
 }
 
+func TestDecisionRequestValidateAcceptsTwoLevelScoreAndImages(t *testing.T) {
+	req := validDecisionRequest()
+	req.Questions[2].Options = req.Questions[2].Options[:2]
+	req.Images = []ImageContent{{URL: "https://example.com/a.png"}, {Data: []byte("x"), MediaType: "image/png"}}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
 func TestDecisionRequestValidateRejects(t *testing.T) {
 	many := make([]DecisionOption, MaxDecisionChoices+1)
 	for i := range many {
@@ -50,6 +59,13 @@ func TestDecisionRequestValidateRejects(t *testing.T) {
 		mutate func(r *DecisionRequest)
 	}{
 		{"no input or images", func(r *DecisionRequest) { r.Input = "" }},
+		{"image with neither URL nor Data", func(r *DecisionRequest) { r.Images = []ImageContent{{}} }},
+		{"image with both URL and Data", func(r *DecisionRequest) {
+			r.Images = []ImageContent{{URL: "https://example.com/a.png", Data: []byte("x"), MediaType: "image/png"}}
+		}},
+		{"image data without media type", func(r *DecisionRequest) {
+			r.Images = []ImageContent{{URL: "https://example.com/a.png"}, {Data: []byte("x")}}
+		}},
 		{"no questions", func(r *DecisionRequest) { r.Questions = nil }},
 		{"empty name", func(r *DecisionRequest) { r.Questions[0].Name = "" }},
 		{"duplicate name", func(r *DecisionRequest) { r.Questions[1].Name = "urgent" }},

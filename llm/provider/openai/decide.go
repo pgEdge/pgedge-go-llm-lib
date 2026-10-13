@@ -128,7 +128,18 @@ func (c *client) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 	}
 	c.addUsage(usage)
 	byName := make(map[string]decisionAnswerWire, len(raw.Answers))
+	asked := make(map[string]struct{}, len(req.Questions))
+	for _, q := range req.Questions {
+		asked[q.Name] = struct{}{}
+	}
 	for _, a := range raw.Answers {
+		if _, ok := asked[a.Name]; !ok {
+			continue // ignore answers to questions nobody asked
+		}
+		if _, dup := byName[a.Name]; dup {
+			// a.Name is one of the caller's own question names here.
+			return nil, decisionResponseError(fmt.Sprintf("response has more than one answer for question %q", a.Name))
+		}
 		byName[a.Name] = a
 	}
 	answers := make([]llm.DecisionAnswer, len(req.Questions))
