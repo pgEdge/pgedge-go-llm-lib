@@ -20,11 +20,12 @@ import (
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/gemini"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/typesafe"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
 )
 
 func TestAllProvidersRegistered(t *testing.T) {
-	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage"}
+	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage", "typesafe"}
 	for _, p := range providers {
 		client, err := llm.NewClient(p, llm.Options{
 			APIKey: "test-key",
@@ -44,7 +45,7 @@ func TestAllProvidersRegistered(t *testing.T) {
 }
 
 func TestAllProvidersZeroInitialUsage(t *testing.T) {
-	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage"}
+	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage", "typesafe"}
 	for _, p := range providers {
 		client, err := llm.NewClient(p, llm.Options{
 			APIKey: "test-key",
