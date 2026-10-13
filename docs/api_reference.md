@@ -22,6 +22,7 @@ type Client interface {
     EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
 
     Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error)
+    Decide(ctx context.Context, req DecisionRequest) (*DecisionResponse, error)
     EmbedMultimodal(ctx context.Context, req MultimodalEmbedRequest) ([][]float64, error)
 
     ListModels(ctx context.Context, opts ...ListModelsOption) ([]string, error)
