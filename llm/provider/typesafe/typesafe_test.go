@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
@@ -160,6 +161,10 @@ func TestDecideBadResponses(t *testing.T) {
 			leak: "bogus-type-xyz", wantTot: 9},
 		"choice not in options": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"bogus-choice-xyz"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
 			leak: "bogus-choice-xyz", wantTot: 9},
+		"score out of range": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":2.5}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			wantTot: 9},
+		"negative score": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":-0.1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
+			wantTot: 9},
 		"malformed": {body: `{"model":"leak-marker-xyz":`, leak: "leak-marker-xyz"},
 	}
 	for name, tt := range tests {
@@ -306,5 +311,85 @@ func TestNewKeyHandling(t *testing.T) {
 	}
 	if _, err := New(llm.Options{APIKey: "k", BaseURL: "ftp://example.com"}); err == nil {
 		t.Error("expected an error for a non-HTTP base URL")
+	}
+}
+
+func TestModelAndResetUsage(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"jev-1","answers":{"urgent":{"type":"noul","noul":0.9}},"usage":{"input_tokens":5,"output_tokens":1}}`))
+	}, "jev-preview")
+	if c.Model() != "jev-preview" {
+		t.Errorf("Model() = %q, want jev-preview", c.Model())
+	}
+	req := llm.DecisionRequest{Input: "x", Questions: []llm.DecisionQuestion{
+		{Name: "urgent", Kind: llm.DecisionYesNo, Instructions: "Urgent?"},
+	}}
+	if _, err := c.Decide(context.Background(), req); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if c.Usage().TotalTokens != 6 {
+		t.Fatalf("Usage() = %+v, want 6 total tokens", c.Usage())
+	}
+	c.ResetUsage()
+	if c.Usage() != (llm.TokenUsage{}) {
+		t.Errorf("Usage() after ResetUsage = %+v", c.Usage())
+	}
+}
+
+func TestListModelsErrors(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"detail":"Invalid API key"}`))
+	}, "")
+	if _, err := c.ListModels(context.Background()); !errors.Is(err, llm.ErrAuthentication) {
+		t.Errorf("ListModels err = %v, want ErrAuthentication", err)
+	}
+	if _, err := c.ListModelsWithMetadata(context.Background(), nil); !errors.Is(err, llm.ErrAuthentication) {
+		t.Errorf("ListModelsWithMetadata err = %v, want ErrAuthentication", err)
+	}
+}
+
+func TestOnRetryHook(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	var events []llm.RetryEvent
+	c, err := New(llm.Options{
+		APIKey:  testKey,
+		BaseURL: srv.URL,
+		Retry:   llm.RetryConfig{MaxRetries: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond},
+		OnRetry: func(e llm.RetryEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if len(events) != 1 || events[0].StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("retry events = %+v, want one 503 event", events)
+	}
+}
+
+func TestDetailText(t *testing.T) {
+	cases := map[string]string{
+		`"plain message"`:                          "plain message",
+		`{"error_type":"bad","message":"boom"}`:    "boom",
+		`[{"loc":["body","questions"],"msg":"x"}]`: "body.questions: x",
+		`[{"loc":[],"msg":"no location"}]`:         "no location",
+		`[]`:                                       "",
+		`{"other":1}`:                              "",
+	}
+	for raw, want := range cases {
+		if got := detailText(json.RawMessage(raw)); got != want {
+			t.Errorf("detailText(%s) = %q, want %q", raw, got, want)
+		}
 	}
 }

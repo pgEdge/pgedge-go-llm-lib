@@ -223,6 +223,9 @@ func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAns
 		}
 		a.Probabilities = orderedProbabilities(q.Options, probs)
 	case llm.DecisionScore:
+		if wa.Score < 0 || wa.Score > float64(len(q.Options)-1) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has an out-of-range score", q.Name))
+		}
 		a.Score, a.Confidence = wa.Score, wa.Confidence
 		// Levels are matched by their integer index (the value
 		// field), not by label, so a label the service re-cases or

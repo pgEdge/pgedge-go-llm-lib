@@ -16,8 +16,8 @@ instead.
 
 Every other provider returns `ErrNotSupported` from `Decide`.
 
-TypeSafe reads its key from `Options.APIKey` or the `TYPESAFE_API_KEY`
-environment variable.
+TypeSafe reads its key from `Options.APIKey`, `Options.APIKeyFile` or the
+`TYPESAFE_API_KEY` environment variable.
 
 ## Asking questions
 
@@ -156,7 +156,7 @@ request includes images.
 |---|---|
 | `ErrInvalidRequest` | The request failed validation (before any network call), exceeded a provider limit, or was rejected by the provider with HTTP 422. |
 | `ErrNotSupported` | The provider does not implement `Decide`, or the request includes images and the provider accepts text only. |
-| `ErrProviderError` | The provider returned a malformed response, such as a missing answer, an answer of the wrong kind, or a choice that was not one of the request's options. |
+| `ErrProviderError` | The provider returned a malformed response, such as a missing answer, an answer of the wrong kind, a choice that was not one of the request's options, or a score outside the range of level indices. |
 | `ErrAuthentication`, `ErrRateLimit` | As for every other method. |
 
 Token usage is counted even when the answers turn out to be malformed, since

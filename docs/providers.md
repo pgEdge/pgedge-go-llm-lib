@@ -296,7 +296,8 @@ The following table describes the TypeSafe provider defaults:
 
 ### Authentication
 
-Set `Options.APIKey` or the `TYPESAFE_API_KEY` environment variable.
+Set `Options.APIKey`, `Options.APIKeyFile` or the `TYPESAFE_API_KEY`
+environment variable.
 TypeSafe uses bearer-token auth.
 
 ### Decisions

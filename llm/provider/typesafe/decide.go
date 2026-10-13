@@ -172,6 +172,9 @@ func convertAnswer(q llm.DecisionQuestion, answers map[string]wireAnswer) (llm.D
 			a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: wa.Probabilities[o.Value]}
 		}
 	case llm.DecisionScore:
+		if wa.Score < 0 || wa.Score > float64(len(q.Options)-1) {
+			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has an out-of-range score", q.Name))
+		}
 		a.Score, a.Confidence = wa.Score, wa.Confidence
 		a.Probabilities = make([]llm.OptionProbability, len(q.Options))
 		for i, o := range q.Options {
