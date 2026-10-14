@@ -77,14 +77,14 @@ type decisionAnswerWire struct {
 	Probability   *float64                  `json:"probability"`
 	Choice        json.RawMessage           `json:"choice"`
 	Score         *float64                  `json:"score"`
-	Confidence    float64                   `json:"confidence"`
+	Confidence    *float64                  `json:"confidence"`
 	Probabilities []decisionProbabilityWire `json:"probabilities"`
 }
 
 type decisionProbabilityWire struct {
 	Value       json.RawMessage `json:"value"`
 	Label       string          `json:"label"`
-	Probability float64         `json:"probability"`
+	Probability *float64        `json:"probability"`
 }
 
 var decisionWireTypes = map[llm.DecisionKind]string{
@@ -216,24 +216,23 @@ func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAns
 		if !decisionHasOption(q.Options, a.Choice) {
 			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q is not one of its options", q.Name))
 		}
-		a.Confidence = wa.Confidence
-		probs := make(map[string]float64, len(wa.Probabilities))
+		probs := make(map[string]*float64, len(wa.Probabilities))
 		for _, p := range wa.Probabilities {
 			var v string
 			if json.Unmarshal(p.Value, &v) == nil {
 				probs[v] = p.Probability
 			}
 		}
-		a.Probabilities = orderedProbabilities(q.Options, probs)
+		return withProbabilities(a, q, wa.Confidence, probs)
 	case llm.DecisionScore:
 		if !isScore(wa.Score, len(q.Options)) {
 			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range score", q.Name))
 		}
-		a.Score, a.Confidence = *wa.Score, wa.Confidence
+		a.Score = *wa.Score
 		// Levels are matched by their integer index (the value
 		// field), not by label, so a label the service re-cases or
 		// rewords cannot misplace a probability.
-		probs := make(map[string]float64, len(wa.Probabilities))
+		probs := make(map[string]*float64, len(wa.Probabilities))
 		for _, p := range wa.Probabilities {
 			var idx int
 			if json.Unmarshal(p.Value, &idx) != nil || idx < 0 || idx >= len(q.Options) {
@@ -241,7 +240,7 @@ func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAns
 			}
 			probs[q.Options[idx].Value] = p.Probability
 		}
-		a.Probabilities = orderedProbabilities(q.Options, probs)
+		return withProbabilities(a, q, wa.Confidence, probs)
 	}
 	return a, nil
 }
@@ -255,12 +254,24 @@ func decisionHasOption(options []llm.DecisionOption, value string) bool {
 	return false
 }
 
-func orderedProbabilities(options []llm.DecisionOption, probs map[string]float64) []llm.OptionProbability {
-	out := make([]llm.OptionProbability, len(options))
-	for i, o := range options {
-		out[i] = llm.OptionProbability{Value: o.Value, Probability: probs[o.Value]}
+// withProbabilities sets a's confidence and the probability of each of
+// q's options, in request order, from probs keyed by option value. A
+// missing or out-of-range value is an error rather than zero, so the
+// caller cannot mistake an absent value for a firm "very unlikely".
+func withProbabilities(a llm.DecisionAnswer, q llm.DecisionQuestion, confidence *float64, probs map[string]*float64) (llm.DecisionAnswer, error) {
+	if !isProbability(confidence) {
+		return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range confidence", q.Name))
 	}
-	return out
+	a.Confidence = *confidence
+	a.Probabilities = make([]llm.OptionProbability, len(q.Options))
+	for i, o := range q.Options {
+		p := probs[o.Value]
+		if !isProbability(p) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range option probability", q.Name))
+		}
+		a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: *p}
+	}
+	return a, nil
 }
 
 func decisionResponseError(msg string) error {

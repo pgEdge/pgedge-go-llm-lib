@@ -178,7 +178,7 @@ func TestDecideRefusal(t *testing.T) {
 		_, _ = w.Write([]byte(`{"model":"m","answers":[
 			{"type":"predicate","name":"urgent","probability":0.4},
 			{"type":"refusal","name":"category"},
-			{"type":"score","name":"severity","score":0,"confidence":1,"probabilities":[]}],"usage":{}}`))
+			{"type":"score","name":"severity","score":0,"confidence":1,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.5},{"value":2,"probability":0.3}]}],"usage":{}}`))
 	})
 	resp, err := c.Decide(context.Background(), decideRequest())
 	if err != nil {
@@ -199,11 +199,19 @@ func TestDecideBadResponses(t *testing.T) {
 		{"non-string choice", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":true},{"type":"refusal","name":"severity"}],"usage":{}}`, "non-string choice"},
 		{"choice not in options", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"other"},{"type":"refusal","name":"severity"}],"usage":{}}`, "not one of its options"},
 		{"duplicate answer", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"predicate","name":"urgent","probability":0.5},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "more than one answer for question"},
-		{"score out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":2.5,"confidence":1,"probabilities":[]}],"usage":{}}`, "missing or out-of-range score"},
-		{"negative score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":-0.1,"confidence":1,"probabilities":[]}],"usage":{}}`, "missing or out-of-range score"},
+		{"score out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":2.5,"confidence":1,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.5},{"value":2,"probability":0.3}]}],"usage":{}}`, "missing or out-of-range score"},
+		{"negative score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":-0.1,"confidence":1,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.5},{"value":2,"probability":0.3}]}],"usage":{}}`, "missing or out-of-range score"},
 		{"missing probability", `{"model":"m","answers":[{"type":"predicate","name":"urgent"},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range probability"},
 		{"probability out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":7.5},{"type":"refusal","name":"category"},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range probability"},
-		{"missing score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","confidence":1,"probabilities":[]}],"usage":{}}`, "missing or out-of-range score"},
+		{"missing score", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","confidence":1,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.5},{"value":2,"probability":0.3}]}],"usage":{}}`, "missing or out-of-range score"},
+		{"choice missing confidence", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"storage","probabilities":[{"value":"replication","probability":0.4},{"value":"storage","probability":0.6}]},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range confidence"},
+		{"choice confidence out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"storage","confidence":7.5,"probabilities":[{"value":"replication","probability":0.4},{"value":"storage","probability":0.6}]},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range confidence"},
+		{"choice missing probabilities", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"storage","confidence":0.6},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range option probability"},
+		{"choice probability out of range", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"storage","confidence":0.6,"probabilities":[{"value":"replication","probability":-3},{"value":"storage","probability":4}]},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range option probability"},
+		{"choice entry missing probability", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"storage","confidence":0.6,"probabilities":[{"value":"replication"},{"value":"storage","probability":0.6}]},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range option probability"},
+		{"choice non-string option value", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"storage","confidence":0.6,"probabilities":[{"value":1,"probability":0.4},{"value":"storage","probability":0.6}]},{"type":"refusal","name":"severity"}],"usage":{}}`, "missing or out-of-range option probability"},
+		{"score missing confidence", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":1,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.5},{"value":2,"probability":0.3}]}],"usage":{}}`, "missing or out-of-range confidence"},
+		{"score missing level probability", `{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"refusal","name":"category"},{"type":"score","name":"severity","score":1,"confidence":0.5,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.8}]}],"usage":{}}`, "missing or out-of-range option probability"},
 		{"malformed", `{"model":`, "could not be decoded"},
 	}
 	for _, tt := range tests {
@@ -277,7 +285,7 @@ func TestMapError422(t *testing.T) {
 
 func TestDecideChoiceNotInOptions(t *testing.T) {
 	c := newDecideClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"secret-leak","confidence":1,"probabilities":[]},{"type":"refusal","name":"severity"}],"usage":{"input_tokens":7,"output_tokens":1,"total_tokens":8}}`))
+		_, _ = w.Write([]byte(`{"model":"m","answers":[{"type":"predicate","name":"urgent","probability":0.4},{"type":"choice","name":"category","choice":"secret-leak","confidence":1,"probabilities":[{"value":0,"probability":0.2},{"value":1,"probability":0.5},{"value":2,"probability":0.3}]},{"type":"refusal","name":"severity"}],"usage":{"input_tokens":7,"output_tokens":1,"total_tokens":8}}`))
 	})
 	_, err := c.Decide(context.Background(), decideRequest())
 	if !errors.Is(err, llm.ErrProviderError) {

@@ -51,12 +51,12 @@ type decideResponse struct {
 }
 
 type wireAnswer struct {
-	Type          string             `json:"type"`
-	Noul          *float64           `json:"noul"`
-	Choice        string             `json:"choice"`
-	Score         *float64           `json:"score"`
-	Confidence    float64            `json:"confidence"`
-	Probabilities map[string]float64 `json:"probabilities"`
+	Type          string              `json:"type"`
+	Noul          *float64            `json:"noul"`
+	Choice        string              `json:"choice"`
+	Score         *float64            `json:"score"`
+	Confidence    *float64            `json:"confidence"`
+	Probabilities map[string]*float64 `json:"probabilities"`
 }
 
 var wireTypes = map[llm.DecisionKind]string{
@@ -169,20 +169,34 @@ func convertAnswer(q llm.DecisionQuestion, answers map[string]wireAnswer) (llm.D
 		if !hasOption(q.Options, wa.Choice) {
 			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q is not one of its options", q.Name))
 		}
-		a.Choice, a.Confidence = wa.Choice, wa.Confidence
-		a.Probabilities = make([]llm.OptionProbability, len(q.Options))
-		for i, o := range q.Options {
-			a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: wa.Probabilities[o.Value]}
-		}
+		a.Choice = wa.Choice
+		return withProbabilities(a, q, wa, func(_ int, o llm.DecisionOption) string { return o.Value })
 	case llm.DecisionScore:
 		if !isScore(wa.Score, len(q.Options)) {
 			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has a missing or out-of-range score", q.Name))
 		}
-		a.Score, a.Confidence = *wa.Score, wa.Confidence
-		a.Probabilities = make([]llm.OptionProbability, len(q.Options))
-		for i, o := range q.Options {
-			a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: wa.Probabilities[strconv.Itoa(i)]}
+		a.Score = *wa.Score
+		return withProbabilities(a, q, wa, func(i int, _ llm.DecisionOption) string { return strconv.Itoa(i) })
+	}
+	return a, nil
+}
+
+// withProbabilities sets a's confidence and the probability of each of
+// q's options, looked up in the answer by key. A missing or out-of-range
+// value is an error rather than zero, so the caller cannot mistake an
+// absent value for a firm "very unlikely".
+func withProbabilities(a llm.DecisionAnswer, q llm.DecisionQuestion, wa wireAnswer, key func(int, llm.DecisionOption) string) (llm.DecisionAnswer, error) {
+	if !isProbability(wa.Confidence) {
+		return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has a missing or out-of-range confidence", q.Name))
+	}
+	a.Confidence = *wa.Confidence
+	a.Probabilities = make([]llm.OptionProbability, len(q.Options))
+	for i, o := range q.Options {
+		p := wa.Probabilities[key(i, o)]
+		if !isProbability(p) {
+			return llm.DecisionAnswer{}, badResponse(fmt.Sprintf("answer to question %q has a missing or out-of-range option probability", q.Name))
 		}
+		a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: *p}
 	}
 	return a, nil
 }

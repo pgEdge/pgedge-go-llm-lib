@@ -150,27 +150,59 @@ func TestDecideModelSelection(t *testing.T) {
 	}
 }
 
+// tsBody builds a TypeSafe decision response from answer fragments,
+// reporting 9 tokens of usage.
+func tsBody(answers ...string) string {
+	return `{"model":"m","answers":{` + strings.Join(answers, ",") + `},"usage":{"input_tokens":7,"output_tokens":2}}`
+}
+
+// Valid answers to sampleRequest's questions, for building responses in
+// which only one answer is bad.
+const (
+	tsUrgent   = `"urgent":{"type":"noul","noul":0.5}`
+	tsCategory = `"category":{"type":"choice","choice":"storage","confidence":0.6,"probabilities":{"replication":0.4,"storage":0.6}}`
+	tsSeverity = `"severity":{"type":"score","score":1,"confidence":0.5,"probabilities":{"0":0.2,"1":0.5,"2":0.3}}`
+)
+
 func TestDecideBadResponses(t *testing.T) {
 	tests := map[string]struct {
 		body    string
+		want    string // must appear in the error message
 		leak    string // must not appear in the error message
 		wantTot int
 	}{
-		"missing answer": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage","probabilities":{}}},"usage":{}}`},
-		"wrong type": {body: `{"model":"m","answers":{"urgent":{"type":"bogus-type-xyz","choice":"x"},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			leak: "bogus-type-xyz", wantTot: 9},
-		"choice not in options": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"bogus-choice-xyz"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			leak: "bogus-choice-xyz", wantTot: 9},
-		"score out of range": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":2.5}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			wantTot: 9},
-		"negative score": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":-0.1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			wantTot: 9},
-		"missing probability": {body: `{"model":"m","answers":{"urgent":{"type":"noul"},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			wantTot: 9},
-		"probability out of range": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":7.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score","score":1}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			wantTot: 9},
-		"missing score": {body: `{"model":"m","answers":{"urgent":{"type":"noul","noul":0.5},"category":{"type":"choice","choice":"storage"},"severity":{"type":"score"}},"usage":{"input_tokens":7,"output_tokens":2}}`,
-			wantTot: 9},
+		"missing answer": {body: `{"model":"m","answers":{` + tsUrgent + `,` + tsCategory + `},"usage":{}}`,
+			want: "has no answer for question"},
+		"wrong type": {body: tsBody(`"urgent":{"type":"bogus-type-xyz","choice":"x"}`, tsCategory, tsSeverity),
+			want: "unexpected type", leak: "bogus-type-xyz", wantTot: 9},
+		"choice not in options": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"bogus-choice-xyz","confidence":0.6,"probabilities":{"replication":0.4,"storage":0.6}}`, tsSeverity),
+			want: "not one of its options", leak: "bogus-choice-xyz", wantTot: 9},
+		"score out of range": {body: tsBody(tsUrgent, tsCategory, `"severity":{"type":"score","score":2.5,"confidence":0.5,"probabilities":{"0":0.2,"1":0.5,"2":0.3}}`),
+			want: "missing or out-of-range score", wantTot: 9},
+		"negative score": {body: tsBody(tsUrgent, tsCategory, `"severity":{"type":"score","score":-0.1,"confidence":0.5,"probabilities":{"0":0.2,"1":0.5,"2":0.3}}`),
+			want: "missing or out-of-range score", wantTot: 9},
+		"missing probability": {body: tsBody(`"urgent":{"type":"noul"}`, tsCategory, tsSeverity),
+			want: "missing or out-of-range probability", wantTot: 9},
+		"probability out of range": {body: tsBody(`"urgent":{"type":"noul","noul":7.5}`, tsCategory, tsSeverity),
+			want: "missing or out-of-range probability", wantTot: 9},
+		"missing score": {body: tsBody(tsUrgent, tsCategory, `"severity":{"type":"score","confidence":0.5,"probabilities":{"0":0.2,"1":0.5,"2":0.3}}`),
+			want: "missing or out-of-range score", wantTot: 9},
+		"choice missing confidence": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"storage","probabilities":{"replication":0.4,"storage":0.6}}`, tsSeverity),
+			want: "missing or out-of-range confidence", wantTot: 9},
+		"choice confidence out of range": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"storage","confidence":7.5,"probabilities":{"replication":0.4,"storage":0.6}}`, tsSeverity),
+			want: "missing or out-of-range confidence", wantTot: 9},
+		"choice missing probabilities": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"storage","confidence":0.6}`, tsSeverity),
+			want: "missing or out-of-range option probability", wantTot: 9},
+		"choice probability out of range": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"storage","confidence":0.6,"probabilities":{"replication":-3,"storage":4}}`, tsSeverity),
+			want: "missing or out-of-range option probability", wantTot: 9},
+		"choice null probability": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"storage","confidence":0.6,"probabilities":{"replication":null,"storage":0.6}}`, tsSeverity),
+			want: "missing or out-of-range option probability", wantTot: 9},
+		"choice unrecognised option key": {body: tsBody(tsUrgent, `"category":{"type":"choice","choice":"storage","confidence":0.6,"probabilities":{"bogus-key-xyz":0.4,"storage":0.6}}`, tsSeverity),
+			want: "missing or out-of-range option probability", leak: "bogus-key-xyz", wantTot: 9},
+		"score missing confidence": {body: tsBody(tsUrgent, tsCategory, `"severity":{"type":"score","score":1,"probabilities":{"0":0.2,"1":0.5,"2":0.3}}`),
+			want: "missing or out-of-range confidence", wantTot: 9},
+		"score unrecognised level key": {body: tsBody(tsUrgent, tsCategory, `"severity":{"type":"score","score":1,"confidence":0.5,"probabilities":{"0":0.2,"1":0.5,"5":0.3}}`),
+			want: "missing or out-of-range option probability", wantTot: 9},
 		"malformed": {body: `{"model":"leak-marker-xyz":`, leak: "leak-marker-xyz"},
 	}
 	for name, tt := range tests {
@@ -179,6 +211,9 @@ func TestDecideBadResponses(t *testing.T) {
 			_, err := c.Decide(context.Background(), sampleRequest())
 			if !errors.Is(err, llm.ErrProviderError) {
 				t.Fatalf("err = %v, want ErrProviderError", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
 			}
 			if tt.leak != "" && strings.Contains(err.Error(), tt.leak) {
 				t.Errorf("message relays response text: %q", err.Error())

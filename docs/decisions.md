@@ -156,7 +156,7 @@ request includes images.
 |---|---|
 | `ErrInvalidRequest` | The request failed validation (before any network call), exceeded a provider limit, or was rejected by the provider with HTTP 422. |
 | `ErrNotSupported` | The provider does not implement `Decide`, or the request includes images and the provider accepts text only. |
-| `ErrProviderError` | The provider returned a malformed response, such as a missing answer, an answer of the wrong kind, a choice that was not one of the request's options, a missing or out-of-range yes/no probability, or a missing score or one outside the range of level indices. |
+| `ErrProviderError` | The provider returned a malformed response, such as a missing answer, an answer of the wrong kind, a choice that was not one of the request's options, a missing or out-of-range yes/no probability, a missing score or one outside the range of level indices, or a missing or out-of-range confidence or option probability on a choice or score answer. |
 | `ErrAuthentication`, `ErrRateLimit` | As for every other method. |
 
 Token usage is counted even when the answers turn out to be malformed, since
