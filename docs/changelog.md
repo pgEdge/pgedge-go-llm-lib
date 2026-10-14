@@ -8,7 +8,7 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-14
 
 ### Added
 - `Client.Decide`, a provider-neutral method for decision models, which answer a set of questions about one input with probabilities rather than free text ([#44](https://github.com/pgEdge/pgedge-go-llm-lib/issues/44)). A `llm.DecisionRequest` carries the input text, optional images and one or more `llm.DecisionQuestion` values, each of which is a yes/no question (`llm.DecisionYesNo`), a choice between 2 and 255 options (`llm.DecisionChoice`) or a score on an ordered scale of at least two levels (`llm.DecisionScore`), and the `llm.DecisionResponse` returns one `llm.DecisionAnswer` per question in request order, holding the probability of yes, the selected option, or the probability-weighted level index, together with the probability of every option in the order the request gave them. `DecisionRequest.Validate` rejects a malformed request with `ErrInvalidRequest` before any network call, `DecisionResponse.Answer` finds an answer by question name, and `llm.ModelCapabilityDecisions` lets `WithCapabilities` list the models that support the method. The names are deliberately neutral, since TypeSafe calls a yes/no question a 'noul' and OpenAI calls it a 'predicate'. Providers without decision models return `ErrNotSupported`, and the method is not exposed through the HTTP proxy
