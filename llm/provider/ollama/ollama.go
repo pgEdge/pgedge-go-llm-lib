@@ -800,6 +800,16 @@ func (c *client) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.RerankResp
 	}
 }
 
+// ---------- Decide ----------
+
+func (c *client) Decide(_ context.Context, _ llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Ollama does not support decision models",
+		Provider: "ollama",
+	}
+}
+
 // ---------- EmbedMultimodal ----------
 
 func (c *client) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {

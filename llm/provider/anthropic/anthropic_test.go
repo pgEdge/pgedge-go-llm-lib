@@ -1947,3 +1947,14 @@ func TestRejectsTemperature(t *testing.T) {
 		}
 	}
 }
+
+func TestDecideNotSupported(t *testing.T) {
+	c, err := New(llm.Options{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	_, err = c.Decide(context.Background(), llm.DecisionRequest{})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Errorf("expected ErrNotSupported, got %v", err)
+	}
+}

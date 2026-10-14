@@ -424,6 +424,16 @@ func (c *client) Rerank(ctx context.Context, req llm.RerankRequest) (*llm.Rerank
 	return out, nil
 }
 
+// ---------- Decide ----------
+
+func (c *client) Decide(_ context.Context, _ llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "Voyage does not support decision models",
+		Provider: providerName,
+	}
+}
+
 // ---------- HTTP helpers ----------
 
 func (c *client) postJSON(ctx context.Context, path string, body, out any) error {

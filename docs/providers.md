@@ -1,7 +1,7 @@
 # Providers
 
-pgEdge Go LLM Library supports five LLM providers (Anthropic,
-OpenAI, Gemini, Ollama, and Voyage). Each provider registers
+pgEdge Go LLM Library supports six LLM providers (Anthropic,
+OpenAI, Gemini, Ollama, Voyage, and TypeSafe). Each provider registers
 itself automatically when you import the provider package.
 
 ## Anthropic
@@ -79,7 +79,13 @@ The OpenAI provider supports the following features:
 - chat completions and streaming.
 - text embeddings with single and batch operations.
 - tool and function calling.
+- decision models through `Decide`.
 - cumulative token usage tracking.
+
+`Decide` uses the `gpt-6-luna` model by default, which is in public beta,
+and accepts text and images. It ignores `Options.Model`, which names a chat
+or embedding model; set `DecisionRequest.Model` to use a different decision
+model. See [Decisions](decisions.md).
 
 The provider does not keep a list of models and the request
 shapes they accept. Instead, it sends each request in the
@@ -267,6 +273,45 @@ vecs, err := client.EmbedMultimodal(ctx, llm.MultimodalEmbedRequest{
     }},
 })
 ```
+
+## TypeSafe
+
+TypeSafe provides the Jev decision models, which answer yes/no, choice and
+score questions with calibrated probabilities. It does not provide chat
+completions or embeddings; every request method other than `Decide`, `ListModels`,
+`ListModelsWithMetadata` and `Ping` returns `ErrNotSupported`.
+
+```go
+client, err := llm.NewClient("typesafe", llm.Options{
+    APIKey: os.Getenv("TYPESAFE_API_KEY"),
+})
+```
+
+The following table describes the TypeSafe provider defaults:
+
+| Option  | Default Value                |
+|---------|------------------------------|
+| BaseURL | https://api.typesafe.ai/v1   |
+| Model   | jev-latest                   |
+
+### Authentication
+
+Set `Options.APIKey`, `Options.APIKeyFile` or the `TYPESAFE_API_KEY`
+environment variable.
+TypeSafe uses bearer-token auth.
+
+### Decisions
+
+`Decide` accepts text only; a request that includes images returns
+`ErrNotSupported`. A score question may have at most 10 levels. See
+[Decisions](decisions.md) for the full description.
+
+### Models
+
+`jev-latest` and `jev-preview` are the available models. `ListModels`
+returns the names the API reports, and every one carries the
+`ModelCapabilityDecisions` capability. The model descriptions the API
+returns are not included, because `llm.ModelInfo` has no field for them.
 
 ## Custom Base URLs
 

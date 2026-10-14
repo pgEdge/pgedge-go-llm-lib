@@ -927,6 +927,7 @@ var openaiModelCapabilities = map[string][]llm.ModelCapability{
 	"gpt-3.5-turbo":   {llm.ModelCapabilityChat, llm.ModelCapabilityTools, llm.ModelCapabilityJSONMode, llm.ModelCapabilityStreaming},
 	"o1":              {llm.ModelCapabilityChat, llm.ModelCapabilityStreaming},
 	"text-embedding-": {llm.ModelCapabilityEmbeddings},
+	"gpt-6-luna":      {llm.ModelCapabilityChat, llm.ModelCapabilityStreaming, llm.ModelCapabilityDecisions},
 }
 
 func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListModelsOption) ([]llm.ModelInfo, error) {
@@ -1035,7 +1036,7 @@ func (c *client) mapError(status int, body []byte) error {
 		sentinel = llm.ErrAuthentication
 	case status == 429:
 		sentinel = llm.ErrRateLimit
-	case status == 400:
+	case status == 400 || status == 422:
 		sentinel = llm.ErrInvalidRequest
 	default:
 		sentinel = llm.ErrProviderError

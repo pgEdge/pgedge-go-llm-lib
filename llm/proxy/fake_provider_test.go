@@ -209,6 +209,14 @@ func (f *fakeProvider) Rerank(_ context.Context, _ llm.RerankRequest) (*llm.Rera
 	}
 }
 
+func (f *fakeProvider) Decide(_ context.Context, _ llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	return nil, &llm.ProviderError{
+		Err:      llm.ErrNotSupported,
+		Message:  "fake does not support decision models",
+		Provider: "fake",
+	}
+}
+
 func (f *fakeProvider) EmbedMultimodal(_ context.Context, _ llm.MultimodalEmbedRequest) ([][]float64, error) {
 	f.sleepDelay()
 	f.mu.RLock()

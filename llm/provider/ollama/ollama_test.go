@@ -2232,3 +2232,13 @@ func TestEmbedNumCtxForeignExtensionAloneOmitsOptions(t *testing.T) {
 		t.Errorf("options should be omitted when only a foreign extension is present, got %#v", captured)
 	}
 }
+
+func TestDecideUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.Decide(context.Background(), llm.DecisionRequest{})
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("expected ErrNotSupported, got %v", err)
+	}
+}

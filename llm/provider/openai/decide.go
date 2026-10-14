@@ -1,0 +1,296 @@
+//-------------------------------------------------------------------------
+//
+// pgEdge Go LLM Library
+//
+// Copyright (c) 2025 - 2026, pgEdge, Inc.
+// This software is released under The PostgreSQL License
+//
+//-------------------------------------------------------------------------
+
+package openai
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/pgEdge/pgedge-go-llm-lib/llm"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
+)
+
+// DefaultDecisionModel is the model Decide uses when the request names
+// none. Options.Model is deliberately not used: on an OpenAI client it
+// names a chat or embedding model.
+const DefaultDecisionModel = "gpt-6-luna"
+
+type decisionRequestWire struct {
+	Model     string                 `json:"model"`
+	Input     any                    `json:"input"`
+	Questions []decisionQuestionWire `json:"questions"`
+}
+
+type decisionMessageWire struct {
+	Role    string                `json:"role"`
+	Content []decisionContentWire `json:"content"`
+}
+
+type decisionContentWire struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+type decisionQuestionWire struct {
+	Type         string               `json:"type"`
+	Name         string               `json:"name"`
+	Instructions string               `json:"instructions"`
+	Choices      []decisionChoiceWire `json:"choices,omitempty"`
+	Levels       []decisionLevelWire  `json:"levels,omitempty"`
+}
+
+type decisionChoiceWire struct {
+	Value       string `json:"value"`
+	Description string `json:"description,omitempty"`
+}
+
+type decisionLevelWire struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type decisionResponseWire struct {
+	Model   string               `json:"model"`
+	Answers []decisionAnswerWire `json:"answers"`
+	Usage   struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type decisionAnswerWire struct {
+	Type          string                    `json:"type"`
+	Name          string                    `json:"name"`
+	Probability   *float64                  `json:"probability"`
+	Choice        json.RawMessage           `json:"choice"`
+	Score         *float64                  `json:"score"`
+	Confidence    *float64                  `json:"confidence"`
+	Probabilities []decisionProbabilityWire `json:"probabilities"`
+}
+
+type decisionProbabilityWire struct {
+	Value       json.RawMessage `json:"value"`
+	Label       string          `json:"label"`
+	Probability *float64        `json:"probability"`
+}
+
+var decisionWireTypes = map[llm.DecisionKind]string{
+	llm.DecisionYesNo:  "predicate",
+	llm.DecisionChoice: "choice",
+	llm.DecisionScore:  "score",
+}
+
+// Decide calls OpenAI's Decisions API (POST /decisions).
+func (c *client) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	if err := req.Validate(); err != nil {
+		var pe *llm.ProviderError
+		if errors.As(err, &pe) {
+			pe.Provider = providerName
+		}
+		return nil, err
+	}
+	var raw decisionResponseWire
+	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
+		c.baseURL+"/decisions", c.headers(), buildDecisionRequest(req), &raw)
+	if err != nil && ctx.Err() != nil {
+		// Return the caller's own cancellation or deadline, even when
+		// it ends whilst the response body is being read.
+		return nil, ctx.Err()
+	}
+	if err != nil && status == 0 {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, c.mapError(status, body)
+	}
+	if err != nil {
+		return nil, &llm.ProviderError{
+			Err:        llm.ErrProviderError,
+			StatusCode: status,
+			Message:    "response could not be decoded",
+			Provider:   providerName,
+		}
+	}
+	// Count billed tokens before converting, so they are recorded even
+	// when an answer turns out to be unusable.
+	usage := llm.TokenUsage{
+		PromptTokens:     raw.Usage.InputTokens,
+		CompletionTokens: raw.Usage.OutputTokens,
+		TotalTokens:      raw.Usage.TotalTokens,
+	}
+	c.addUsage(usage)
+	byName := make(map[string]decisionAnswerWire, len(raw.Answers))
+	asked := make(map[string]struct{}, len(req.Questions))
+	for _, q := range req.Questions {
+		asked[q.Name] = struct{}{}
+	}
+	for _, a := range raw.Answers {
+		if _, ok := asked[a.Name]; !ok {
+			continue // ignore answers to questions nobody asked
+		}
+		if _, dup := byName[a.Name]; dup {
+			// a.Name is one of the caller's own question names here.
+			return nil, decisionResponseError(fmt.Sprintf("response has more than one answer for question %q", a.Name))
+		}
+		byName[a.Name] = a
+	}
+	answers := make([]llm.DecisionAnswer, len(req.Questions))
+	for i, q := range req.Questions {
+		a, err := convertDecisionAnswer(q, byName)
+		if err != nil {
+			return nil, err
+		}
+		answers[i] = a
+	}
+	return &llm.DecisionResponse{Answers: answers, Model: raw.Model, Usage: usage}, nil
+}
+
+func buildDecisionRequest(req llm.DecisionRequest) decisionRequestWire {
+	model := req.Model
+	if model == "" {
+		model = DefaultDecisionModel
+	}
+	wire := decisionRequestWire{Model: model, Input: req.Input}
+	if len(req.Images) > 0 {
+		var parts []decisionContentWire
+		if req.Input != "" {
+			parts = append(parts, decisionContentWire{Type: "input_text", Text: req.Input})
+		}
+		for _, img := range req.Images {
+			url := img.URL
+			if url == "" {
+				url = "data:" + img.MediaType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
+			}
+			parts = append(parts, decisionContentWire{Type: "input_image", ImageURL: url})
+		}
+		wire.Input = []decisionMessageWire{{Role: "user", Content: parts}}
+	}
+	wire.Questions = make([]decisionQuestionWire, len(req.Questions))
+	for i, q := range req.Questions {
+		wq := decisionQuestionWire{Type: decisionWireTypes[q.Kind], Name: q.Name, Instructions: q.Instructions}
+		for _, o := range q.Options {
+			if q.Kind == llm.DecisionChoice {
+				wq.Choices = append(wq.Choices, decisionChoiceWire{Value: o.Value, Description: o.Description})
+			} else {
+				wq.Levels = append(wq.Levels, decisionLevelWire{Label: o.Value, Description: o.Description})
+			}
+		}
+		wire.Questions[i] = wq
+	}
+	return wire
+}
+
+// convertDecisionAnswer maps OpenAI's answer to q onto the neutral
+// type, putting probabilities in the request's option order.
+func convertDecisionAnswer(q llm.DecisionQuestion, byName map[string]decisionAnswerWire) (llm.DecisionAnswer, error) {
+	wa, ok := byName[q.Name]
+	if !ok {
+		return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("response has no answer for question %q", q.Name))
+	}
+	a := llm.DecisionAnswer{Name: q.Name, Kind: q.Kind}
+	if wa.Type == "refusal" {
+		a.Refused = true
+		return a, nil
+	}
+	if wa.Type != decisionWireTypes[q.Kind] {
+		return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has an unexpected type", q.Name))
+	}
+	switch q.Kind {
+	case llm.DecisionYesNo:
+		if !isProbability(wa.Probability) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range probability", q.Name))
+		}
+		a.Probability = *wa.Probability
+	case llm.DecisionChoice:
+		if err := json.Unmarshal(wa.Choice, &a.Choice); err != nil {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a non-string choice", q.Name))
+		}
+		if !decisionHasOption(q.Options, a.Choice) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q is not one of its options", q.Name))
+		}
+		probs := make(map[string]*float64, len(wa.Probabilities))
+		for _, p := range wa.Probabilities {
+			var v string
+			if json.Unmarshal(p.Value, &v) == nil {
+				probs[v] = p.Probability
+			}
+		}
+		return withProbabilities(a, q, wa.Confidence, probs)
+	case llm.DecisionScore:
+		if !isScore(wa.Score, len(q.Options)) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range score", q.Name))
+		}
+		a.Score = *wa.Score
+		// Levels are matched by their integer index (the value
+		// field), not by label, so a label the service re-cases or
+		// rewords cannot misplace a probability.
+		probs := make(map[string]*float64, len(wa.Probabilities))
+		for _, p := range wa.Probabilities {
+			var idx int
+			if json.Unmarshal(p.Value, &idx) != nil || idx < 0 || idx >= len(q.Options) {
+				continue
+			}
+			probs[q.Options[idx].Value] = p.Probability
+		}
+		return withProbabilities(a, q, wa.Confidence, probs)
+	}
+	return a, nil
+}
+
+func decisionHasOption(options []llm.DecisionOption, value string) bool {
+	for _, o := range options {
+		if o.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+// withProbabilities sets a's confidence and the probability of each of
+// q's options, in request order, from probs keyed by option value. A
+// missing or out-of-range value is an error rather than zero, so the
+// caller cannot mistake an absent value for a firm "very unlikely".
+func withProbabilities(a llm.DecisionAnswer, q llm.DecisionQuestion, confidence *float64, probs map[string]*float64) (llm.DecisionAnswer, error) {
+	if !isProbability(confidence) {
+		return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range confidence", q.Name))
+	}
+	a.Confidence = *confidence
+	a.Probabilities = make([]llm.OptionProbability, len(q.Options))
+	for i, o := range q.Options {
+		p := probs[o.Value]
+		if !isProbability(p) {
+			return llm.DecisionAnswer{}, decisionResponseError(fmt.Sprintf("answer to question %q has a missing or out-of-range option probability", q.Name))
+		}
+		a.Probabilities[i] = llm.OptionProbability{Value: o.Value, Probability: *p}
+	}
+	return a, nil
+}
+
+func decisionResponseError(msg string) error {
+	return &llm.ProviderError{Err: llm.ErrProviderError, Message: msg, Provider: providerName}
+}
+
+// isProbability reports whether p was present in the response and lies
+// in [0, 1], so a renamed or missing field cannot read as a firm "no".
+func isProbability(p *float64) bool {
+	return p != nil && *p >= 0 && *p <= 1
+}
+
+// isScore reports whether s was present and lies within the zero-based
+// level indexes of a question with the given number of levels.
+func isScore(s *float64, levels int) bool {
+	return s != nil && *s >= 0 && *s <= float64(levels-1)
+}

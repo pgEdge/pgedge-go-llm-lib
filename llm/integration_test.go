@@ -12,6 +12,7 @@ package llm_test
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"testing"
 
@@ -20,11 +21,12 @@ import (
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/gemini"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/typesafe"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
 )
 
 func TestAllProvidersRegistered(t *testing.T) {
-	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage"}
+	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage", "typesafe"}
 	for _, p := range providers {
 		client, err := llm.NewClient(p, llm.Options{
 			APIKey: "test-key",
@@ -44,7 +46,7 @@ func TestAllProvidersRegistered(t *testing.T) {
 }
 
 func TestAllProvidersZeroInitialUsage(t *testing.T) {
-	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage"}
+	providers := []string{"anthropic", "openai", "gemini", "ollama", "voyage", "typesafe"}
 	for _, p := range providers {
 		client, err := llm.NewClient(p, llm.Options{
 			APIKey: "test-key",
@@ -191,6 +193,83 @@ func TestIntegrationAnthropic(t *testing.T) {
 	helloChat(t, c)
 }
 
+// decideSample exercises Decide with one question of each kind and
+// checks the answers are well-formed. Decision models are
+// probabilistic, so only shapes and ranges are asserted.
+func decideSample(t *testing.T, c llm.Client) {
+	t.Helper()
+	resp, err := c.Decide(context.Background(), llm.DecisionRequest{
+		Input: "Alert: replication lag on the standby has grown from 2 seconds to 45 seconds over ten minutes and is still rising.",
+		Questions: []llm.DecisionQuestion{
+			{Name: "urgent", Kind: llm.DecisionYesNo, Instructions: "Does this need attention within the hour?"},
+			{Name: "category", Kind: llm.DecisionChoice, Instructions: "Which area does this alert concern?",
+				Options: []llm.DecisionOption{{Value: "replication"}, {Value: "storage"}, {Value: "connections"}}},
+			{Name: "severity", Kind: llm.DecisionScore, Instructions: "How severe is this?",
+				Options: []llm.DecisionOption{{Value: "low"}, {Value: "medium"}, {Value: "high"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if len(resp.Answers) != 3 {
+		t.Fatalf("got %d answers, want 3", len(resp.Answers))
+	}
+	for i, name := range []string{"urgent", "category", "severity"} {
+		a := resp.Answers[i]
+		if a.Name != name {
+			t.Fatalf("answer %d is %q, want %q", i, a.Name, name)
+		}
+		if a.Refused {
+			t.Logf("question %q was refused", name)
+			continue
+		}
+		switch a.Kind {
+		case llm.DecisionYesNo:
+			if a.Probability < 0 || a.Probability > 1 {
+				t.Errorf("%s: probability %v out of range", name, a.Probability)
+			}
+		case llm.DecisionChoice:
+			if a.Choice == "" || len(a.Probabilities) != 3 {
+				t.Errorf("%s: %+v", name, a)
+			}
+		case llm.DecisionScore:
+			if a.Score < 0 || a.Score > 2 || len(a.Probabilities) != 3 {
+				t.Errorf("%s: %+v", name, a)
+				break
+			}
+			var w float64
+			for j, p := range a.Probabilities {
+				w += float64(j) * p.Probability
+			}
+			t.Logf("%s: score=%v probabilities=%+v", name, a.Score, a.Probabilities)
+			if math.Abs(a.Score-w) > 0.05 {
+				t.Errorf("%s: score %v differs from probability-weighted index %v", name, a.Score, w)
+			}
+		}
+	}
+	if resp.Usage.PromptTokens == 0 {
+		t.Errorf("expected non-zero prompt tokens, got %+v", resp.Usage)
+	}
+}
+
+func TestIntegrationTypeSafe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	key := os.Getenv("TYPESAFE_API_KEY")
+	if key == "" {
+		t.Skip("TYPESAFE_API_KEY not set; skipping TypeSafe integration test")
+	}
+	c, err := llm.NewClient("typesafe", llm.Options{APIKey: key, Model: pickModel("TYPESAFE_MODEL", "jev-latest")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	decideSample(t, c)
+}
+
 func TestIntegrationOpenAI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in -short mode")
@@ -216,6 +295,9 @@ func TestIntegrationOpenAI(t *testing.T) {
 		t.Fatal(err)
 	}
 	helloEmbed(t, embedClient)
+
+	// Decide ignores Options.Model and uses gpt-6-luna.
+	decideSample(t, chatClient)
 }
 
 func TestIntegrationGemini(t *testing.T) {
