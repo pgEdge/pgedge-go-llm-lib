@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
@@ -223,6 +224,32 @@ func TestDecideBadResponses(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecideReturnsContextError(t *testing.T) {
+	tests := map[string]bool{"before headers": false, "during body": true}
+	for name, flush := range tests {
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			c := newDecideClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if flush {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"model":`))
+					w.(http.Flusher).Flush()
+				}
+				<-release
+			})
+			// Registered after the server's cleanup, so it runs first
+			// and lets the handler return before the server waits for it.
+			t.Cleanup(func() { close(release) })
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			_, err := c.Decide(ctx, decideRequest())
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 			}
 		})
 	}

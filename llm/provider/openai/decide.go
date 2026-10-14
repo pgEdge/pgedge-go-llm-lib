@@ -105,6 +105,11 @@ func (c *client) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 	var raw decisionResponseWire
 	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/decisions", c.headers(), buildDecisionRequest(req), &raw)
+	if err != nil && ctx.Err() != nil {
+		// Return the caller's own cancellation or deadline, even when
+		// it ends whilst the response body is being read.
+		return nil, ctx.Err()
+	}
 	if err != nil && status == 0 {
 		return nil, err
 	}
