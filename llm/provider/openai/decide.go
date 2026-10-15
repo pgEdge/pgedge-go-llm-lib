@@ -117,12 +117,7 @@ func (c *client) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 		return nil, c.mapError(status, body)
 	}
 	if err != nil {
-		return nil, &llm.ProviderError{
-			Err:        llm.ErrProviderError,
-			StatusCode: status,
-			Message:    "response could not be decoded",
-			Provider:   providerName,
-		}
+		return nil, c.decodeError(status, err)
 	}
 	// Count billed tokens before converting, so they are recorded even
 	// when an answer turns out to be unusable.

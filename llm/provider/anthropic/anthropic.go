@@ -277,6 +277,9 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 			}
 			return nil, c.mapError(status, body)
 		}
+		if err != nil {
+			return nil, c.decodeError(status, err)
+		}
 
 		resp := c.parseChatResponse(&aResp)
 		c.addUsage(resp.Usage)
@@ -771,6 +774,9 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 	if status < 200 || status >= 300 {
 		return nil, c.mapError(status, body)
 	}
+	if err != nil {
+		return nil, c.decodeError(status, err)
+	}
 
 	var infos []llm.ModelInfo
 	for _, m := range resp.Data {
@@ -811,6 +817,17 @@ type anthropicErrorResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error"`
+}
+
+// decodeError reports a successful response whose body did not decode,
+// which would otherwise reach the caller as an empty result.
+func (c *client) decodeError(status int, err error) error {
+	return &llm.ProviderError{
+		Err:        llm.ErrProviderError,
+		StatusCode: status,
+		Message:    "response could not be decoded: " + err.Error(),
+		Provider:   providerName,
+	}
 }
 
 // mapError converts a non-2xx response into a *llm.ProviderError.

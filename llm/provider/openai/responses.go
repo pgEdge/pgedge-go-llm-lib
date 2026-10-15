@@ -358,6 +358,9 @@ func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest) (*llm.C
 	if status < 200 || status >= 300 {
 		return nil, body.rejection(status, respBody), nil
 	}
+	if err != nil {
+		return nil, nil, c.decodeError(status, err)
+	}
 
 	resp := parseResponsesResponse(&raw)
 	c.addUsage(resp.Usage)
