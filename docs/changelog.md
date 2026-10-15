@@ -8,6 +8,14 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- Response bodies are now capped, and redirects refused, so a misbehaving or hostile endpoint can no longer exhaust the caller's memory or receive a request meant for the provider ([#47](https://github.com/pgEdge/pgedge-go-llm-lib/issues/47)). A response body, or a whole stream, longer than `Options.MaxResponseBytes` (256 MiB by default) fails with an error rather than being read in full; previously an endless response grew the heap until the request timeout fired. Redirects are no longer followed, because following a 307 or 308 resent the prompt to the redirect target, together with the Anthropic and Gemini API keys, which travel in custom headers that Go does not strip on a cross-host redirect. A redirect now fails the request with an error, and a caller who needs redirects can supply an `HTTPClient` with its own `CheckRedirect`, which the library keeps
+
+### Fixed
+- A successful response whose body could not be read in full, for example because the connection dropped part way through, is now reported as an error; the OpenAI, Anthropic, Gemini and Ollama providers previously returned an empty response with no error. Error responses are now read up to 64 KiB, as the streaming paths already did
+
 ## [0.5.0] - 2026-10-14
 
 ### Added

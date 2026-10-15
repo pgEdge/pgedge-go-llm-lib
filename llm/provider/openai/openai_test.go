@@ -2003,3 +2003,29 @@ func TestListModelsWithMetadataEmbeddingDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestChatOversizedResponseIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"` +
+			strings.Repeat("x", 4096) + `"}}]}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(llm.Options{
+		APIKey:           "test-key",
+		Model:            "gpt-4o",
+		BaseURL:          srv.URL,
+		Retry:            llm.RetryConfig{Disabled: true},
+		MaxResponseBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "hi"}}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds the 1024-byte limit") {
+		t.Fatalf("resp, err = %+v, %v; want a size-limit error, not an empty reply", resp, err)
+	}
+}

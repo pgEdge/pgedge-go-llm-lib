@@ -381,6 +381,11 @@ type Options struct {
 	// When HTTPClient is set, the library still wraps its Transport with
 	// the retry middleware (unless Retry.Disabled) and the header
 	// middleware (when CustomHeaders is non-empty).
+	//
+	// The library refuses HTTP redirects, since following one would
+	// resend the prompt, and any API key carried in a custom header,
+	// to another server. A supplied HTTPClient whose CheckRedirect is
+	// set keeps its own redirect policy.
 	HTTPClient *http.Client
 
 	// MaxTokens caps the model's response length. Use llm.Int(n) to
@@ -427,6 +432,15 @@ type Options struct {
 	// historical behaviour where only RequestTimeout applies. Set it
 	// smaller than RequestTimeout to leave room for retries.
 	PerAttemptTimeout time.Duration
+
+	// MaxResponseBytes caps how many bytes of a single HTTP response
+	// body the client reads; a response that proves longer fails with
+	// an error rather than being read in full. For streaming requests
+	// it caps the whole stream. Zero or less (default) uses the
+	// library's 256 MiB default, which is far above any legitimate
+	// provider response but stops a misbehaving or hostile endpoint
+	// from exhausting memory before RequestTimeout fires.
+	MaxResponseBytes int64
 
 	Retry RetryConfig
 
