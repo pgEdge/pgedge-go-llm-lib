@@ -189,6 +189,9 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	if status < 200 || status >= 300 {
 		return nil, mapError(status, body)
 	}
+	if err != nil {
+		return nil, decodeError(status, err)
+	}
 
 	resp := c.parseChatResponse(&ollamaResp, len(req.Tools) > 0)
 	c.addUsage(resp.Usage)
@@ -722,6 +725,9 @@ func (c *client) embedOnce(ctx context.Context, text string) ([]float64, int, []
 	if status < 200 || status >= 300 {
 		return nil, status, body, mapError(status, body)
 	}
+	if err != nil {
+		return nil, status, nil, decodeError(status, err)
+	}
 
 	if len(resp.Embeddings) == 0 {
 		return nil, status, body, &llm.ProviderError{
@@ -867,6 +873,9 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 	if status < 200 || status >= 300 {
 		return nil, mapError(status, body)
 	}
+	if err != nil {
+		return nil, decodeError(status, err)
+	}
 
 	infos := make([]llm.ModelInfo, len(resp.Models))
 	for i, m := range resp.Models {
@@ -941,6 +950,17 @@ func (c *client) capabilitiesForModel(ctx context.Context, name string) []llm.Mo
 
 type ollamaErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// decodeError reports a successful response whose body did not decode,
+// which would otherwise reach the caller as an empty result.
+func decodeError(status int, err error) error {
+	return &llm.ProviderError{
+		Err:        llm.ErrProviderError,
+		StatusCode: status,
+		Message:    "response could not be decoded: " + err.Error(),
+		Provider:   providerName,
+	}
 }
 
 // mapError converts a non-2xx response into a *llm.ProviderError.
