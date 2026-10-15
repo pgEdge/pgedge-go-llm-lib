@@ -291,6 +291,9 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	if status < 200 || status >= 300 {
 		return nil, c.mapError(status, body)
 	}
+	if err != nil {
+		return nil, c.decodeError(status, err)
+	}
 
 	resp := c.parseChatResponse(&gResp)
 	c.addUsage(resp.Usage)
@@ -830,6 +833,9 @@ func (c *client) Embed(ctx context.Context, text string) ([]float64, error) {
 	if status < 200 || status >= 300 {
 		return nil, c.mapError(status, body)
 	}
+	if err != nil {
+		return nil, c.decodeError(status, err)
+	}
 
 	if len(resp.Embedding.Values) == 0 {
 		return nil, &llm.ProviderError{
@@ -879,6 +885,9 @@ func (c *client) EmbedBatch(ctx context.Context, texts []string) ([][]float64, e
 	}
 	if status < 200 || status >= 300 {
 		return nil, c.mapError(status, body)
+	}
+	if err != nil {
+		return nil, c.decodeError(status, err)
 	}
 
 	if len(resp.Embeddings) != len(texts) {
@@ -1041,6 +1050,9 @@ func (c *client) ListModelsWithMetadata(ctx context.Context, opts ...llm.ListMod
 	if status < 200 || status >= 300 {
 		return nil, c.mapError(status, body)
 	}
+	if err != nil {
+		return nil, c.decodeError(status, err)
+	}
 
 	cfg := llm.ListModelsConfig{}
 	for _, opt := range opts {
@@ -1124,6 +1136,17 @@ type geminiErrorResponse struct {
 		Message string `json:"message"`
 		Status  string `json:"status"`
 	} `json:"error"`
+}
+
+// decodeError reports a successful response whose body did not decode,
+// which would otherwise reach the caller as an empty result.
+func (c *client) decodeError(status int, err error) error {
+	return &llm.ProviderError{
+		Err:        llm.ErrProviderError,
+		StatusCode: status,
+		Message:    "response could not be decoded: " + err.Error(),
+		Provider:   providerName,
+	}
 }
 
 // mapError converts a non-2xx response into a *llm.ProviderError.
