@@ -10,9 +10,13 @@ project adheres to
 
 ## [Unreleased]
 
+### Security
+- Response bodies are now capped, and redirects refused, so a misbehaving or hostile endpoint can no longer exhaust the caller's memory or receive a request meant for the provider ([#47](https://github.com/pgEdge/pgedge-go-llm-lib/issues/47)). A response body, or a whole stream, longer than `Options.MaxResponseBytes` (256 MiB by default) fails with an error rather than being read in full; previously an endless response grew the heap until the request timeout fired. Redirects are no longer followed, because following a 307 or 308 resent the prompt to the redirect target, together with the Anthropic and Gemini API keys, which travel in custom headers that Go does not strip on a cross-host redirect. A redirect now fails the request with an error, and a caller who needs redirects can supply an `HTTPClient` with its own `CheckRedirect`, which the library keeps
+
 ### Fixed
 - **Behaviour change:** the OpenAI provider no longer drops `tool_result` blocks sent in a `RoleUser` message, the Anthropic convention, which made OpenAI reject the next turn with a 400 because the earlier tool calls had no matching results ([#52](https://github.com/pgEdge/pgedge-go-llm-lib/issues/52)). Each such block is now sent as a `role: "tool"` message on Chat Completions, or a `function_call_output` item on the Responses API, in the original order, followed by a user message holding the rest of that message's content, if any
 - The OpenAI provider now sends the `output` key on a Responses API `function_call_output` item when the tool result is empty, rather than omitting it, since the API requires it
+- A successful response whose body could not be read in full, for example because the connection dropped part way through, is now reported as an error; the OpenAI, Anthropic, Gemini and Ollama providers previously returned an empty response with no error. Error responses are now read up to 64 KiB, as the streaming paths already did
 
 ## [0.5.0] - 2026-10-14
 

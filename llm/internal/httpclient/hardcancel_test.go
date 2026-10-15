@@ -222,7 +222,7 @@ func TestDoJSON_SmallRequestConnectionReusable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -282,7 +282,7 @@ func TestDoSSERequest_ReleasesWatchdogAfterHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -316,7 +316,7 @@ func TestDoSSERequest_ReleasesWatchdogAfterHeaders(t *testing.T) {
 // leaving it running forever waiting for a context that may never be
 // canceled.
 func TestDoSSERequest_ErrorDoesNotLeakWatchdog(t *testing.T) {
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

@@ -82,7 +82,7 @@ func New(opts llm.Options) (llm.Client, error) {
 		}
 	}
 	return &client{
-		httpClient: httpclient.New(opts.HTTPClient, opts.CustomHeaders, retryCfg, opts.RequestTimeout),
+		httpClient: httpclient.New(opts.HTTPClient, opts.CustomHeaders, retryCfg, opts.RequestTimeout, opts.MaxResponseBytes),
 		model:      opts.Model,
 		baseURL:    baseURL,
 		opts:       opts,

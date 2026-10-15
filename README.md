@@ -89,10 +89,11 @@ import (
 | `Model`          | `string`            | Model name or ID. |
 | `BaseURL`        | `string`            | Override the API endpoint (proxy gateway, LM Studio, etc.). Validated at construction. |
 | `CustomHeaders`  | `map[string]string` | Headers injected into every upstream request (tracing IDs, gateway tokens). |
-| `HTTPClient`     | `*http.Client`      | Bring your own HTTP client (mTLS, OpenTelemetry round-tripper, corporate proxy). |
+| `HTTPClient`     | `*http.Client`      | Bring your own HTTP client (mTLS, OpenTelemetry round-tripper, corporate proxy). Redirects are refused unless the client sets its own `CheckRedirect`. |
 | `MaxTokens`      | `*int`              | Default response length cap. `nil` → library default of 4096. Use `llm.Int(n)`. |
 | `Temperature`    | `*float64`          | Default sampling temperature. `nil` → omitted from the request, leaving the provider's own default. Use `llm.Float(t)`. |
 | `RequestTimeout` | `time.Duration`     | Wall-clock cap for a single HTTP attempt (0 → 120 s default). |
+| `MaxResponseBytes` | `int64`           | Cap on a single response body, or a whole stream; a longer response fails with an error (0 → 256 MiB default). |
 | `Retry`          | `RetryConfig`       | Retry policy (see below). |
 | `OnRetry`        | `func(RetryEvent)`  | Observability hook fired before each retry sleep. |
 | `Logger`         | `*slog.Logger`      | Diagnostics sink; `nil` keeps the library silent. Records request adjustments at Debug level (see below). |

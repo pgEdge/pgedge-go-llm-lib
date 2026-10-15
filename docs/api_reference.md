@@ -111,6 +111,7 @@ type Options struct {
     Temperature   *float64
     RequestTimeout time.Duration
     PerAttemptTimeout time.Duration
+    MaxResponseBytes int64
     Retry         RetryConfig
     OnRetry       func(RetryEvent)
 }
@@ -122,11 +123,12 @@ type Options struct {
 | `Model`          | —           | Model name or ID. |
 | `BaseURL`        | per-provider| Override the API endpoint. Validated at construction. |
 | `CustomHeaders`  | —           | Headers injected into every request. |
-| `HTTPClient`     | library-built | Custom `*http.Client` (mTLS, round-trippers). |
+| `HTTPClient`     | library-built | Custom `*http.Client` (mTLS, round-trippers). Redirects are refused unless the client sets its own `CheckRedirect`. |
 | `MaxTokens`      | `4096`      | Default response length cap. Use `llm.Int(n)`. |
 | `Temperature`    | omitted     | Default sampling temperature. Unset means the field is left out of the upstream request, so the provider's own default applies; some newer models reject any temperature value. Use `llm.Float(t)`. |
 | `RequestTimeout` | `120s`      | Wall-clock cap per request, spanning all retries. |
 | `PerAttemptTimeout` | `0` (off) | Wall-clock cap per attempt; makes slow attempts retryable. Set below `RequestTimeout`. |
+| `MaxResponseBytes` | `256 MiB` | Cap on a single response body, or a whole stream; a longer response fails with an error. |
 | `Retry`          | 5 retries   | Retry policy. |
 | `OnRetry`        | —           | Observability hook fired before each retry sleep. |
 | `Logger`         | — (silent)  | `*slog.Logger` for diagnostics; records at Debug level each adjustment a provider makes after the API rejects a parameter or endpoint. |

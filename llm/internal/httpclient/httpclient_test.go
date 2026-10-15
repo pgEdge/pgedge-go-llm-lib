@@ -114,7 +114,7 @@ func TestDoJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	var resp testResp
 	statusCode, body, err := DoJSON(context.Background(), client, "POST", server.URL, nil, testReq{Name: "World"}, &resp)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestDoJSONWithHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	headers := map[string]string{
 		"x-api-key":         "test-key",
 		"anthropic-version": "2023-06-01",
@@ -163,7 +163,7 @@ func TestDoJSONErrorStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	var resp map[string]any
 	statusCode, body, err := DoJSON(context.Background(), client, "POST", server.URL, nil, nil, &resp)
 	if err != nil {
@@ -187,9 +187,9 @@ func TestNewWithHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, map[string]string{"X-Test-Header": "hello"}, RetryConfig{Disabled: true}, 0)
-	if _, ok := client.Transport.(*HeaderTransport); !ok {
-		t.Fatalf("expected *HeaderTransport, got %T", client.Transport)
+	client := New(nil, map[string]string{"X-Test-Header": "hello"}, RetryConfig{Disabled: true}, 0, 0)
+	if tr := belowLimit(t, client); !isHeader(tr) {
+		t.Fatalf("expected *HeaderTransport, got %T", tr)
 	}
 
 	req, _ := http.NewRequest("GET", server.URL, nil)
@@ -214,7 +214,7 @@ func TestDoJSONNilBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	var dest map[string]any
 	statusCode, _, err := DoJSON(context.Background(), client, "GET", server.URL, nil, nil, &dest)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestDoJSONNilBody(t *testing.T) {
 
 // TestDoJSONBadURL verifies that an invalid URL causes DoJSON to return an error.
 func TestDoJSONBadURL(t *testing.T) {
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	_, _, err := DoJSON(context.Background(), client, "GET", "://bad-url", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for bad URL, got nil")
@@ -239,7 +239,7 @@ func TestDoJSONBadURL(t *testing.T) {
 
 // TestDoJSONMarshalError verifies that a non-marshalable body returns an error.
 func TestDoJSONMarshalError(t *testing.T) {
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	// channels cannot be marshalled to JSON
 	badBody := make(chan int)
 	_, _, err := DoJSON(context.Background(), client, "POST", "http://localhost", nil, badBody, nil)
@@ -258,7 +258,7 @@ func TestDoSSERequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	resp, err := DoSSERequest(context.Background(), client, "POST", server.URL,
 		map[string]string{"Accept": "text/event-stream"}, nil)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestDoSSERequestWithBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	resp, err := DoSSERequest(context.Background(), client, "POST", server.URL,
 		nil, reqPayload{Stream: true})
 	if err != nil {
@@ -313,7 +313,7 @@ func TestDoSSERequestWithBody(t *testing.T) {
 
 // TestDoSSERequestMarshalError verifies that a non-marshalable body returns an error.
 func TestDoSSERequestMarshalError(t *testing.T) {
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	badBody := make(chan int)
 	_, err := DoSSERequest(context.Background(), client, "POST", "http://localhost", nil, badBody)
 	if err == nil {
@@ -323,7 +323,7 @@ func TestDoSSERequestMarshalError(t *testing.T) {
 
 // TestDoSSERequestBadURL verifies that an invalid URL returns an error.
 func TestDoSSERequestBadURL(t *testing.T) {
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0)
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
 	_, err := DoSSERequest(context.Background(), client, "GET", "://bad-url", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for bad URL, got nil")
@@ -409,15 +409,33 @@ func TestSSEScannerErrTooLong(t *testing.T) {
 	}
 }
 
+// belowLimit returns the transport New layers beneath its outermost
+// response-size limiter, failing the test if the limiter is missing.
+func belowLimit(t *testing.T, c *http.Client) http.RoundTripper {
+	t.Helper()
+	lt, ok := c.Transport.(*limitTransport)
+	if !ok {
+		t.Fatalf("outer transport = %T, want *limitTransport", c.Transport)
+	}
+	return lt.inner
+}
+
+func isHeader(tr http.RoundTripper) bool {
+	_, ok := tr.(*HeaderTransport)
+	return ok
+}
+
+func isRetry(tr http.RoundTripper) bool {
+	_, ok := tr.(*RetryTransport)
+	return ok
+}
+
 func TestNewInstallsRetryTransport(t *testing.T) {
 	cfg := RetryConfig{MaxRetries: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}
 
-	c := New(nil, nil, cfg, 0)
-	if c.Transport == nil {
-		t.Fatal("Transport is nil; expected RetryTransport")
-	}
-	if _, ok := c.Transport.(*RetryTransport); !ok {
-		t.Errorf("Transport = %T, want *RetryTransport", c.Transport)
+	c := New(nil, nil, cfg, 0, 0)
+	if tr := belowLimit(t, c); !isRetry(tr) {
+		t.Errorf("Transport = %T, want *RetryTransport", tr)
 	}
 }
 
@@ -425,26 +443,26 @@ func TestNewInstallsRetryTransportForPerAttemptTimeout(t *testing.T) {
 	// Even with retries disabled, a per-attempt timeout requires the
 	// RetryTransport so the timeout is enforced per attempt.
 	cfg := RetryConfig{Disabled: true, PerAttemptTimeout: time.Second}
-	c := New(nil, nil, cfg, 0)
-	if _, ok := c.Transport.(*RetryTransport); !ok {
-		t.Errorf("Transport = %T, want *RetryTransport when PerAttemptTimeout is set", c.Transport)
+	c := New(nil, nil, cfg, 0, 0)
+	if tr := belowLimit(t, c); !isRetry(tr) {
+		t.Errorf("Transport = %T, want *RetryTransport when PerAttemptTimeout is set", tr)
 	}
 }
 
 func TestNewSkipsRetryWhenDisabled(t *testing.T) {
-	c := New(nil, nil, RetryConfig{Disabled: true}, 0)
-	if _, ok := c.Transport.(*RetryTransport); ok {
+	c := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
+	if isRetry(belowLimit(t, c)) {
 		t.Errorf("got RetryTransport when retry was disabled")
 	}
 }
 
 func TestNewWithHeadersComposesRetryAndHeaders(t *testing.T) {
 	cfg := RetryConfig{MaxRetries: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}
-	c := New(nil, map[string]string{"X-Foo": "bar"}, cfg, 0)
+	c := New(nil, map[string]string{"X-Foo": "bar"}, cfg, 0, 0)
 
-	ht, ok := c.Transport.(*HeaderTransport)
+	ht, ok := belowLimit(t, c).(*HeaderTransport)
 	if !ok {
-		t.Fatalf("outer transport = %T, want *HeaderTransport", c.Transport)
+		t.Fatalf("transport below the limiter = %T, want *HeaderTransport", belowLimit(t, c))
 	}
 	if _, ok := ht.inner.(*RetryTransport); !ok {
 		t.Errorf("HeaderTransport.inner = %T, want *RetryTransport", ht.inner)
@@ -524,5 +542,119 @@ func TestIsLocalBaseURL(t *testing.T) {
 				t.Errorf("IsLocalBaseURL(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDoJSONRejectsOversizedSuccessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"pad":"` + strings.Repeat("x", 100) + `"}`))
+	}))
+	defer srv.Close()
+
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 64)
+	var dest map[string]any
+	status, body, err := DoJSON(context.Background(), client, http.MethodGet, srv.URL, nil, nil, &dest)
+	if err == nil || !strings.Contains(err.Error(), "exceeds the 64-byte limit") {
+		t.Fatalf("err = %v, want a size-limit error", err)
+	}
+	if status != 0 || body != nil {
+		t.Errorf("status, body = %d, %q; want 0, nil so callers treat it as a failure", status, body)
+	}
+}
+
+func TestDoJSONAcceptsBodyAtLimit(t *testing.T) {
+	payload := `{"ok":true}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, int64(len(payload)))
+	var dest map[string]any
+	status, _, err := DoJSON(context.Background(), client, http.MethodGet, srv.URL, nil, nil, &dest)
+	if err != nil || status != http.StatusOK || dest["ok"] != true {
+		t.Fatalf("status, dest, err = %d, %v, %v; want 200 with the body decoded", status, dest, err)
+	}
+}
+
+func TestDoJSONEndlessBodyFailsFast(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		chunk := []byte(strings.Repeat(" ", 4096))
+		for r.Context().Err() == nil {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client := New(nil, nil, RetryConfig{Disabled: true}, 10*time.Second, 1<<20)
+	start := time.Now()
+	_, _, err := DoJSON(context.Background(), client, http.MethodGet, srv.URL, nil, nil, &map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("err = %v, want a size-limit error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("took %v; the limit should stop the read long before the timeout", elapsed)
+	}
+}
+
+func TestDoJSONCapsErrorBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(strings.Repeat("e", maxErrorBody+1000)))
+	}))
+	defer srv.Close()
+
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
+	status, body, err := DoJSON(context.Background(), client, http.MethodGet, srv.URL, nil, nil, nil)
+	if err != nil || status != http.StatusInternalServerError || len(body) != maxErrorBody {
+		t.Fatalf("status, len(body), err = %d, %d, %v; want 500, %d, nil", status, len(body), err, maxErrorBody)
+	}
+}
+
+func TestNewRefusesRedirects(t *testing.T) {
+	var reached bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
+	status, _, err := DoJSON(context.Background(), client, http.MethodPost, origin.URL,
+		map[string]string{"x-api-key": "test-key"}, map[string]string{"prompt": "hello"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "refusing to follow HTTP 307 redirect") {
+		t.Fatalf("err = %v, want a refused-redirect error", err)
+	}
+	if status != 0 {
+		t.Errorf("status = %d, want 0", status)
+	}
+	if reached {
+		t.Error("the redirect target received the request")
+	}
+}
+
+func TestNewKeepsCallerRedirectPolicy(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	base := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return nil }}
+	client := New(base, nil, RetryConfig{Disabled: true}, 0, 0)
+	var dest map[string]any
+	status, _, err := DoJSON(context.Background(), client, http.MethodGet, origin.URL, nil, nil, &dest)
+	if err != nil || status != http.StatusOK || dest["ok"] != true {
+		t.Fatalf("status, dest, err = %d, %v, %v; want the redirect followed", status, dest, err)
 	}
 }
