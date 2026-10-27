@@ -15,7 +15,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -82,7 +84,7 @@ func New(opts llm.Options) (llm.Client, error) {
 		}
 	}
 	return &client{
-		httpClient: httpclient.New(opts.HTTPClient, opts.CustomHeaders, retryCfg, opts.RequestTimeout),
+		httpClient: httpclient.New(opts.HTTPClient, opts.CustomHeaders, retryCfg, opts.RequestTimeout, opts.MaxResponseBytes),
 		model:      opts.Model,
 		baseURL:    baseURL,
 		opts:       opts,
@@ -571,9 +573,15 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 		decoder := json.NewDecoder(resp.Body)
 		var accumulated strings.Builder
 
-		for decoder.More() {
+		for {
+			// Loop on Decode rather than More, since More reports a
+			// read error (such as the response size limit) as the end
+			// of the stream.
 			var chunk ollamaChatResponse
 			if err := decoder.Decode(&chunk); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
 				errCh <- fmt.Errorf("decode stream chunk: %w", err)
 				return
 			}

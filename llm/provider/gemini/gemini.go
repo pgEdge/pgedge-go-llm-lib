@@ -81,7 +81,7 @@ func New(opts llm.Options) (llm.Client, error) {
 		}
 	}
 	return &client{
-		httpClient: httpclient.New(opts.HTTPClient, opts.CustomHeaders, retryCfg, opts.RequestTimeout),
+		httpClient: httpclient.New(opts.HTTPClient, opts.CustomHeaders, retryCfg, opts.RequestTimeout, opts.MaxResponseBytes),
 		apiKey:     opts.APIKey,
 		model:      opts.Model,
 		baseURL:    baseURL,
@@ -799,6 +799,10 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 					Usage: usage,
 				}
 			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			errCh <- fmt.Errorf("read stream: %w", err)
 		}
 	}()
 

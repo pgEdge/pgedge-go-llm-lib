@@ -33,6 +33,80 @@ import (
 
 const defaultTimeout = 120 * time.Second
 
+// DefaultMaxResponseBytes caps a response body when the caller sets no
+// limit. It is far above any legitimate provider response (an OpenAI
+// embedding batch of 2048 inputs at 3072 dimensions is about 125 MB of
+// JSON), but stops a misbehaving or hostile endpoint from exhausting
+// memory before the request timeout fires.
+const DefaultMaxResponseBytes int64 = 256 << 20
+
+// limitTransport wraps an http.RoundTripper and caps how many bytes of
+// each response body can be read.
+type limitTransport struct {
+	inner http.RoundTripper
+	max   int64
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t *limitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.inner.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	resp.Body = &limitedBody{rc: resp.Body, remaining: t.max, max: t.max}
+	return resp, nil
+}
+
+// CloseIdleConnections passes through to the inner transport, so
+// http.Client.CloseIdleConnections still reaches the connection pool.
+func (t *limitTransport) CloseIdleConnections() {
+	if ci, ok := t.inner.(interface{ CloseIdleConnections() }); ok {
+		ci.CloseIdleConnections()
+	}
+}
+
+// limitedBody reads at most max bytes from rc and fails with an error,
+// rather than a silent EOF, once the body proves to be longer, so a
+// truncated body is never mistaken for a complete one.
+type limitedBody struct {
+	rc        io.ReadCloser
+	remaining int64
+	max       int64
+}
+
+func (b *limitedBody) Read(p []byte) (int, error) {
+	if b.remaining <= 0 {
+		// Probe for one more byte to tell a body of exactly max bytes
+		// from a longer one.
+		var probe [1]byte
+		n, err := b.rc.Read(probe[:])
+		if n > 0 {
+			return 0, fmt.Errorf("response body exceeds the %d-byte limit (see Options.MaxResponseBytes)", b.max)
+		}
+		return 0, err
+	}
+	if int64(len(p)) > b.remaining {
+		p = p[:b.remaining]
+	}
+	n, err := b.rc.Read(p)
+	b.remaining -= int64(n)
+	return n, err
+}
+
+func (b *limitedBody) Close() error { return b.rc.Close() }
+
+// refuseRedirect is the CheckRedirect installed when the caller's client
+// has none. Provider APIs do not redirect, and following one would replay
+// the request body (the prompt) and any API key sent in a custom header,
+// which Go does not strip on a cross-host redirect, to another server.
+func refuseRedirect(req *http.Request, _ []*http.Request) error {
+	status := 0
+	if req.Response != nil {
+		status = req.Response.StatusCode
+	}
+	return fmt.Errorf("refusing to follow HTTP %d redirect to host %q", status, req.URL.Host)
+}
+
 // HeaderTransport wraps an http.RoundTripper and injects custom
 // headers into every request without overriding existing ones.
 type HeaderTransport struct {
@@ -80,8 +154,12 @@ func (t *HeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // non-zero Timeout and timeout is 0, the caller's timeout is
 // preserved.
 //
+// maxResponse caps the bytes read from any response body; zero or less
+// applies DefaultMaxResponseBytes. Reading past the cap fails with an
+// error. Redirects are refused unless base sets its own CheckRedirect.
+//
 // New does not mutate base — it returns a copy.
-func New(base *http.Client, headers map[string]string, retry RetryConfig, timeout time.Duration) *http.Client {
+func New(base *http.Client, headers map[string]string, retry RetryConfig, timeout time.Duration, maxResponse int64) *http.Client {
 	// `inner` is typed as the interface so the subsequent reassignment
 	// from base.Transport (also an http.RoundTripper) compiles cleanly.
 	var inner http.RoundTripper //nolint:staticcheck,revive // ST1023: explicit interface type is intentional
@@ -99,6 +177,10 @@ func New(base *http.Client, headers map[string]string, retry RetryConfig, timeou
 	if len(headers) > 0 {
 		inner = NewHeaderTransport(inner, headers)
 	}
+	if maxResponse <= 0 {
+		maxResponse = DefaultMaxResponseBytes
+	}
+	inner = &limitTransport{inner: inner, max: maxResponse}
 
 	out := base
 	if out == nil {
@@ -109,6 +191,9 @@ func New(base *http.Client, headers map[string]string, retry RetryConfig, timeou
 		out = &clone
 	}
 	out.Transport = inner
+	if out.CheckRedirect == nil {
+		out.CheckRedirect = refuseRedirect
+	}
 	if timeout > 0 {
 		out.Timeout = timeout
 	} else if out.Timeout == 0 {
@@ -120,8 +205,13 @@ func New(base *http.Client, headers map[string]string, retry RetryConfig, timeou
 // DoJSON sends an HTTP request with a JSON body and decodes the JSON
 // response. It returns the status code, raw response body, and any
 // error. For non-2xx responses, the response is not decoded into dest
-// but the raw body and status code are still returned so the caller
-// can extract provider-specific error details.
+// but the first 64 KiB of the body and the status code are still
+// returned so the caller can extract provider-specific error details.
+//
+// A failure to read a 2xx body (including one over the client's size
+// limit) returns a zero status, like a transport failure, because the
+// response is unusable and callers treat a non-zero 2xx status as
+// success.
 func DoJSON(ctx context.Context, client *http.Client, method, url string, headers map[string]string, reqBody any, dest any) (int, []byte, error) {
 	var bodyReader io.Reader
 	if reqBody != nil {
@@ -160,12 +250,16 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, header
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("read response: %w", err)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, ReadErrorBody(resp.Body), nil
 	}
 
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 && dest != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if dest != nil {
 		if err := json.Unmarshal(body, dest); err != nil {
 			return resp.StatusCode, body, fmt.Errorf("decode response: %w", err)
 		}
@@ -234,8 +328,14 @@ func NewSSEScanner(r io.Reader) *SSEScanner {
 }
 
 // Scan advances to the next SSE data event. Returns false when done.
+// A read error (such as the response size limit) ends the scan without
+// returning the partial line read before it, so callers see the read
+// error from Err rather than a decode error for a truncated event.
 func (s *SSEScanner) Scan() bool {
 	for s.scanner.Scan() {
+		if s.scanner.Err() != nil {
+			return false
+		}
 		line := s.scanner.Text()
 		if strings.HasPrefix(line, "data: ") {
 			s.data = strings.TrimPrefix(line, "data: ")
