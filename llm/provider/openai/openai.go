@@ -783,6 +783,10 @@ func (c *client) chatStreamCompletions(ctx context.Context, req llm.ChatRequest)
 				}
 			}
 		}
+
+		if err := scanner.Err(); err != nil {
+			errCh <- fmt.Errorf("read stream: %w", err)
+		}
 	}()
 
 	return &llm.Stream{

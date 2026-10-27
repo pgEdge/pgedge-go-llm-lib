@@ -2242,3 +2242,49 @@ func TestDecideUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrNotSupported, got %v", err)
 	}
 }
+
+// TestChatStreamOversizedIsAnError checks that a stream cut short by
+// MaxResponseBytes fails, whether the cap lands on an event boundary or
+// part-way through an event, rather than returning a truncated reply.
+func TestChatStreamOversizedIsAnError(t *testing.T) {
+	head := ""
+	event := "{\"message\":{\"role\":\"assistant\",\"content\":\"xxxxxxxxxx\"},\"done\":false}\n"
+	tail := "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n"
+	body := head + strings.Repeat(event, 200) + tail
+	boundary := int64(len(head) + 10*len(event))
+
+	for _, tc := range []struct {
+		name  string
+		limit int64
+	}{
+		{"event boundary", boundary},
+		{"mid-event", boundary + int64(len(event)/2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			c, err := New(llm.Options{
+				Model:            "llama3",
+				BaseURL:          srv.URL,
+				Retry:            llm.RetryConfig{Disabled: true},
+				MaxResponseBytes: tc.limit,
+			})
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+			stream, err := c.ChatStream(context.Background(), llm.ChatRequest{
+				Messages: []llm.Message{llm.UserText("hi")},
+			})
+			if err != nil {
+				t.Fatalf("ChatStream: %v", err)
+			}
+			resp, err := stream.Collect(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "Options.MaxResponseBytes") {
+				t.Fatalf("resp, err = %+v, %v; want a size-limit error, not a truncated reply", resp, err)
+			}
+		})
+	}
+}

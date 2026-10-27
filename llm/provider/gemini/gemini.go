@@ -800,6 +800,10 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 				}
 			}
 		}
+
+		if err := scanner.Err(); err != nil {
+			errCh <- fmt.Errorf("read stream: %w", err)
+		}
 	}()
 
 	return &llm.Stream{

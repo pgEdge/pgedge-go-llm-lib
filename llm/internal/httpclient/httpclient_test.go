@@ -626,7 +626,13 @@ func TestNewRefusesRedirects(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	client := New(nil, nil, RetryConfig{Disabled: true}, 0, 0)
+	// A caller's client with no redirect policy gets the refusal on the
+	// copy New returns, never on the client itself.
+	base := &http.Client{}
+	client := New(base, nil, RetryConfig{Disabled: true}, 0, 0)
+	if base.CheckRedirect != nil {
+		t.Error("New set CheckRedirect on the caller's client")
+	}
 	status, _, err := DoJSON(context.Background(), client, http.MethodPost, origin.URL,
 		map[string]string{"x-api-key": "test-key"}, map[string]string{"prompt": "hello"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "refusing to follow HTTP 307 redirect") {

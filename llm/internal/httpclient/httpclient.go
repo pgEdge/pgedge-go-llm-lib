@@ -328,8 +328,14 @@ func NewSSEScanner(r io.Reader) *SSEScanner {
 }
 
 // Scan advances to the next SSE data event. Returns false when done.
+// A read error (such as the response size limit) ends the scan without
+// returning the partial line read before it, so callers see the read
+// error from Err rather than a decode error for a truncated event.
 func (s *SSEScanner) Scan() bool {
 	for s.scanner.Scan() {
+		if s.scanner.Err() != nil {
+			return false
+		}
 		line := s.scanner.Text()
 		if strings.HasPrefix(line, "data: ") {
 			s.data = strings.TrimPrefix(line, "data: ")
