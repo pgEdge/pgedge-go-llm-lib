@@ -52,7 +52,10 @@ type responsesInputItem struct {
 	CallID    string                 `json:"call_id,omitempty"`
 	Name      string                 `json:"name,omitempty"`
 	Arguments string                 `json:"arguments,omitempty"`
-	Output    string                 `json:"output,omitempty"`
+	// Output is a pointer so that a function_call_output item keeps
+	// its required "output" key when the tool result is empty, whilst
+	// message and function_call items still omit it.
+	Output *string `json:"output,omitempty"`
 }
 
 // responsesContentPart is one element of an input message's content
@@ -326,10 +329,11 @@ func convertResponsesToolMessage(m llm.Message) []responsesInputItem {
 		if b.Type != llm.BlockToolResult {
 			continue
 		}
+		output := b.Text
 		out = append(out, responsesInputItem{
 			Type:   "function_call_output",
 			CallID: b.ToolUseID,
-			Output: b.Text,
+			Output: &output,
 		})
 	}
 	return out
