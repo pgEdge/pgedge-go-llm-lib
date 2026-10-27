@@ -301,3 +301,37 @@ func TestExtendedThinkingRejectionNotRetried(t *testing.T) {
 		t.Errorf("requests = %d, want 1", len(got))
 	}
 }
+
+func TestTemperatureRejectionWithAdaptiveThinking(t *testing.T) {
+	// With thinking from ReasoningEffort, a temperature rejection that
+	// does not mention thinking is the model's, so it is remembered;
+	// one that does is dropped for that call only.
+	for _, tc := range []struct {
+		name       string
+		body       string
+		remembered bool
+	}{
+		{"model rejects temperature", temperatureDeprecatedBody, true},
+		{"thinking conflict", `{"type":"error","error":{"type":"invalid_request_error","message":"temperature is not supported when thinking is enabled"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, requests := effortServer(t, tc.body)
+			c := newEffortClient(t, srv.URL, llm.Options{
+				Temperature:     llm.Float(0.7),
+				ReasoningEffort: llm.ReasoningEffortHigh,
+			})
+			for i := 0; i < 2; i++ {
+				if err := sendEffort(t, c, false, llm.ChatRequest{}); err != nil {
+					t.Fatalf("call: %v", err)
+				}
+			}
+			got := requests()
+			if len(got) != 3 {
+				t.Fatalf("requests = %d, want 3", len(got))
+			}
+			if _, sent := got[2]["temperature"]; sent == tc.remembered {
+				t.Errorf("second call temperature sent = %v, want %v", sent, !tc.remembered)
+			}
+		})
+	}
+}

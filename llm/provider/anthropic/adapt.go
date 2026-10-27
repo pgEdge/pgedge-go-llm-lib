@@ -117,11 +117,11 @@ func (c *client) applyReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRe
 // there is none. It only adapts when the request actually carried the
 // parameter the model rejected:
 //
-//   - Temperature: when the request also carried thinking, the
-//     rejection may be down to that per-request setting rather than the
-//     model, so the caller omits temperature for this call only;
-//     otherwise the client omits it from every later request, since a
-//     client is bound to a single model.
+//   - Temperature: when the request also carried thinking that may
+//     be what the model objects to, the caller omits temperature for
+//     this call only; otherwise the client omits it from every later
+//     request, since a client is bound to a single model. See
+//     temperatureRejectedForThinking.
 //   - Effort level or thinking type set from ReasoningEffort: the client
 //     omits that level or type from every later request.
 //
@@ -140,7 +140,7 @@ func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRe
 
 	switch {
 	case sent.Temperature != nil && rejectsTemperature(msg):
-		if sent.Thinking != nil {
+		if temperatureRejectedForThinking(sent, msg) {
 			c.logAdjustment(adjustTemperature, "omitted for this request")
 			return adjustTemperature
 		}
@@ -169,6 +169,22 @@ func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRe
 		return adjustThinking
 	}
 	return ""
+}
+
+// temperatureRejectedForThinking reports whether a temperature
+// rejection may be down to the thinking the request carried rather
+// than the model. Thinking from the Extension is a per-request choice,
+// so any rejection alongside it is treated that way, as before
+// ReasoningEffort existed. Thinking from ReasoningEffort is usually a
+// client default sent on every request, so the rejection is put down
+// to it only when the message mentions thinking; otherwise a model that
+// refuses temperature outright would cost an extra request on every
+// call.
+func temperatureRejectedForThinking(sent *anthropicChatRequest, msg string) bool {
+	if sent.Thinking == nil {
+		return false
+	}
+	return sent.Thinking.Type == "enabled" || strings.Contains(msg, "thinking")
 }
 
 // learn sets a learned flag and reports whether it was newly set, so
