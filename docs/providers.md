@@ -57,6 +57,19 @@ you append the response's content to the conversation as it
 stands. If the API rejects a replayed block's signature because
 the conversation ahead of it changed, the provider removes every
 thinking block from that request's history and resends it once.
+The removal applies to that call only, and your own history
+still holds the rejected blocks, so every later request in the
+conversation is rejected once before the resend succeeds.
+Anthropic's newer models accept a replayed thinking block only
+whilst the system prompt, the tools and the messages ahead of it
+are unchanged, so a block is rejected after an earlier turn is
+edited, reordered or removed, after the system prompt or tool
+list is rebuilt, or after client-side compaction of the history.
+If your code changes the history in any of those ways, remove the
+`BlockThinking` and `BlockRedactedThinking` blocks from your copy
+of the history before sending the next request, leaving the other
+blocks in each turn in place.
+
 The other providers leave thinking blocks out of their requests.
 
 The Anthropic provider does not support embeddings. Calling
