@@ -160,18 +160,38 @@ func (t *HeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 //
 // New does not mutate base — it returns a copy.
 func New(base *http.Client, headers map[string]string, retry RetryConfig, timeout time.Duration, maxResponse int64) *http.Client {
-	// `inner` is typed as the interface so the subsequent reassignment
-	// from base.Transport (also an http.RoundTripper) compiles cleanly.
-	var inner http.RoundTripper //nolint:staticcheck,revive // ST1023: explicit interface type is intentional
-	inner = http.DefaultTransport
-	if base != nil && base.Transport != nil {
-		inner = base.Transport
+	out := copyClient(base)
+	out.Transport = buildTransport(baseTransport(base), headers, retry, maxResponse)
+	if out.CheckRedirect == nil {
+		out.CheckRedirect = refuseRedirect
 	}
+	out.Timeout = resolveTimeout(timeout, out.Timeout)
+	return out
+}
 
-	// The RetryTransport also enforces per-attempt timeouts, so it is
-	// installed whenever retries are enabled OR a per-attempt timeout is
-	// configured (even with retries disabled).
-	if (!retry.Disabled && retry.MaxRetries > 0) || retry.PerAttemptTimeout > 0 {
+// baseTransport returns base's Transport, or http.DefaultTransport when
+// base is nil or has none.
+func baseTransport(base *http.Client) http.RoundTripper {
+	if base != nil && base.Transport != nil {
+		return base.Transport
+	}
+	return http.DefaultTransport
+}
+
+// retryWanted reports whether the RetryTransport must be installed. It
+// also enforces per-attempt timeouts, so it is needed whenever retries
+// are enabled OR a per-attempt timeout is configured (even with retries
+// disabled).
+func retryWanted(retry RetryConfig) bool {
+	return (!retry.Disabled && retry.MaxRetries > 0) || retry.PerAttemptTimeout > 0
+}
+
+// buildTransport layers the retry middleware (when wanted), the header
+// middleware (when headers is non-empty) and the response size limit
+// over inner. A maxResponse of zero or less applies
+// DefaultMaxResponseBytes.
+func buildTransport(inner http.RoundTripper, headers map[string]string, retry RetryConfig, maxResponse int64) http.RoundTripper {
+	if retryWanted(retry) {
 		inner = &RetryTransport{Inner: inner, Config: retry}
 	}
 	if len(headers) > 0 {
@@ -180,26 +200,30 @@ func New(base *http.Client, headers map[string]string, retry RetryConfig, timeou
 	if maxResponse <= 0 {
 		maxResponse = DefaultMaxResponseBytes
 	}
-	inner = &limitTransport{inner: inner, max: maxResponse}
+	return &limitTransport{inner: inner, max: maxResponse}
+}
 
-	out := base
-	if out == nil {
-		out = &http.Client{}
-	} else {
-		// Don't mutate caller's client.
-		clone := *base
-		out = &clone
+// copyClient returns a shallow copy of base, or a new zero client when
+// base is nil, so New never mutates the caller's client.
+func copyClient(base *http.Client) *http.Client {
+	if base == nil {
+		return &http.Client{}
 	}
-	out.Transport = inner
-	if out.CheckRedirect == nil {
-		out.CheckRedirect = refuseRedirect
-	}
+	clone := *base
+	return &clone
+}
+
+// resolveTimeout returns timeout when it is positive, otherwise the
+// client's existing timeout, falling back to defaultTimeout when that
+// is zero too.
+func resolveTimeout(timeout, existing time.Duration) time.Duration {
 	if timeout > 0 {
-		out.Timeout = timeout
-	} else if out.Timeout == 0 {
-		out.Timeout = defaultTimeout
+		return timeout
 	}
-	return out
+	if existing == 0 {
+		return defaultTimeout
+	}
+	return existing
 }
 
 // DoJSON sends an HTTP request with a JSON body and decodes the JSON
