@@ -94,7 +94,7 @@ func namesExtraField(body []byte, extra map[string]any) bool {
 	param, msg := errResp.Error.Param, errResp.Error.Message
 	for k := range extra {
 		if param == "" {
-			if strings.Contains(msg, k) {
+			if mentionsField(msg, k) {
 				return true
 			}
 			continue
@@ -102,6 +102,42 @@ func namesExtraField(body []byte, extra map[string]any) bool {
 		if param == k || strings.HasPrefix(param, k+".") || strings.HasPrefix(param, k+"[") {
 			return true
 		}
+	}
+	return false
+}
+
+// mentionsField reports whether msg names field as a whole field name,
+// or as the start of a path inside it, rather than as part of another
+// name: "effort" is not named by "reasoning_effort" or
+// "reasoning.effort".
+func mentionsField(msg, field string) bool {
+	if field == "" {
+		return false
+	}
+	for i := 0; ; {
+		j := strings.Index(msg[i:], field)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(field)
+		if (start == 0 || !partOfName(msg[start-1], true)) &&
+			(end == len(msg) || !partOfName(msg[end], false)) {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+// partOfName reports whether c, next to a field name in a message,
+// makes it part of a longer name. A dot before the name makes it a
+// path inside another field; a dot after it is a path inside it, or
+// the end of a sentence.
+func partOfName(c byte, before bool) bool {
+	switch {
+	case c == '_', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '.':
+		return before
 	}
 	return false
 }

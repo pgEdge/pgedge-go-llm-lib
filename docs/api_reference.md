@@ -442,9 +442,10 @@ fields that `ReasoningEffort` produces too: an extra
 `reasoning_effort` replaces the level on `/v1/chat/completions`, and
 an extra `reasoning` replaces the whole `reasoning` object on
 `/v1/responses`, not only its `effort`. Since every field goes to
-whichever endpoint the request is routed to, pin the route with
-`openai.Extension{ResponsesAPI: ...}` before setting a field that only
-one endpoint accepts.
+whichever endpoint the request is routed to, pin the route before
+setting a field that only one endpoint accepts. The route is read only
+from `Options.Extensions`, so put `openai.Extension{ResponsesAPI: ...}`
+there; `ResponsesAPI` on a request's extension has no effect.
 
 An error whose `param`, or whose message when `param` is empty, names
 an extra field is returned to the caller without the client adjusting

@@ -193,6 +193,11 @@ func TestNamesExtraField(t *testing.T) {
 		{`{"error":{"param":null,"message":"Unknown parameter: 'metadata'."}}`, true},
 		{`{"error":{"param":"metadata_extra"}}`, false},
 		{`{"error":{"param":"temperature","message":"metadata"}}`, false},
+		{`{"error":{"param":null,"message":"Unknown parameter: 'metadata.tenant'."}}`, true},
+		{`{"error":{"param":null,"message":"metadata is not supported"}}`, true},
+		{`{"error":{"param":null,"message":"Unknown parameter: 'user_metadata'."}}`, false},
+		{`{"error":{"param":null,"message":"Unknown parameter: 'metadata2'."}}`, false},
+		{`{"error":{"param":null,"message":"Unknown parameter: 'request.metadata'."}}`, false},
 		{`not json`, false},
 	}
 	for _, tc := range cases {
@@ -203,4 +208,21 @@ func TestNamesExtraField(t *testing.T) {
 	if namesExtraField([]byte(`{"error":{"param":"metadata"}}`), nil) {
 		t.Error("no extra fields should name nothing")
 	}
+}
+
+func TestExtraBodyNearMissStillAdjusts(t *testing.T) {
+	// An extra field whose name is only part of the rejected one must
+	// not stop the client dropping the rejected reasoning effort.
+	modes(t, func(t *testing.T, stream bool) {
+		srv, requests := adaptServer(t, scriptedReply{400, effortParamRejected})
+		c := newExtraBodyClient(t, srv.URL, false, map[string]any{"effort": "gateway"}, nil)
+
+		if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortLow}); err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		got := requests()
+		if len(got) != 2 || got[1].has("reasoning_effort") || got[1].body["effort"] != "gateway" {
+			t.Errorf("want a resend without reasoning_effort and with the extra field: %d requests, %v", len(got), got[len(got)-1].body)
+		}
+	})
 }
