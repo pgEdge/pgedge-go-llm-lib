@@ -19,7 +19,7 @@ project adheres to
 ### Fixed
 - **Behaviour change:** the OpenAI provider no longer drops `tool_result` blocks sent in a `RoleUser` message, the Anthropic convention, which made OpenAI reject the next turn with a 400 because the earlier tool calls had no matching results ([#52](https://github.com/pgEdge/pgedge-go-llm-lib/issues/52)). Each such block is now sent as a `role: "tool"` message on Chat Completions, or a `function_call_output` item on the Responses API, in the original order, followed by a user message holding the rest of that message's content, if any
 - The OpenAI provider now sends the `output` key on a Responses API `function_call_output` item when the tool result is empty, rather than omitting it, since the API requires it
-- A successful response whose body could not be read in full, for example because the connection dropped part way through, is now reported as an error; the OpenAI, Anthropic, Gemini and Ollama providers previously returned an empty response with no error. Error responses are now read up to 64 KiB, as the streaming paths already did
+- A successful response whose body could not be read in full, for example because the connection dropped part way through, is now reported as an error; the OpenAI, Anthropic, Gemini and Ollama providers previously returned an empty response with no error. Error responses outside the streaming paths are now read up to 64 KiB
 
 ## [0.5.0] - 2026-10-14
 
