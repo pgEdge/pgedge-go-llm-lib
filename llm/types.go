@@ -483,7 +483,9 @@ type RetryConfig struct {
 // When the same field is set on a per-request ChatRequest, the
 // per-request value takes precedence. A nil pointer (or, for
 // ReasoningEffort and PromptCaching, the zero value) on a ChatRequest
-// field falls through to the Options default.
+// field falls through to the Options default. ExtraBody is a client
+// default in the same way, overridden key by key by the ExtraBody of an
+// openai.Extension on the request rather than by a ChatRequest field.
 //
 // Fields that appear ONLY on Options (APIKey, Model, BaseURL,
 // CustomHeaders, Retry, RequestTimeout, HTTPClient, OnRetry, Extensions)
@@ -545,6 +547,14 @@ type Options struct {
 	// the same name, used when a request leaves it unset. The zero
 	// value means off.
 	PromptCaching PromptCaching
+
+	// ExtraBody holds fields the OpenAI provider adds to the JSON body
+	// of every Chat and ChatStream request, for fields the library does
+	// not model, such as an OpenAI-compatible gateway's own options. An
+	// openai.Extension's ExtraBody, on Extensions or on a request, is
+	// merged over it key by key; see openai.Extension.ExtraBody for how
+	// the fields are applied. Other providers ignore it.
+	ExtraBody map[string]any
 
 	// RequestTimeout caps the wall-clock time of a single HTTP request,
 	// including all retries. Zero (default) uses the library's

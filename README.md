@@ -94,6 +94,7 @@ import (
 | `Temperature`    | `*float64`          | Default sampling temperature. `nil` → omitted from the request, leaving the provider's own default. Use `llm.Float(t)`. |
 | `ReasoningEffort` | `ReasoningEffort`  | Default reasoning effort (`llm.ReasoningEffortNone` through `llm.ReasoningEffortMax`). Unset → omitted, leaving the model's own default. |
 | `PromptCaching`  | `PromptCaching`     | Default automatic prompt caching (`llm.PromptCachingOff` or `llm.PromptCachingAuto`). Unset → off. |
+| `ExtraBody`      | `map[string]any`    | Fields the OpenAI provider adds to every chat request body (see [OpenAI: extra body fields](#openai-extra-body-fields)). |
 | `RequestTimeout` | `time.Duration`     | Wall-clock cap for a single HTTP attempt (0 → 120 s default). |
 | `MaxResponseBytes` | `int64`           | Cap on a single response body, or a whole stream; a longer response fails with an error (0 → 256 MiB default). |
 | `Retry`          | `RetryConfig`       | Retry policy (see below). |
@@ -410,6 +411,25 @@ vec, _ := client.Embed(ctx, "hello") // 512-dim vector
 
 `EmbeddingDimensions: 0` (the zero value) omits the parameter entirely
 and the model returns its native vector size.
+
+### OpenAI: extra body fields
+
+`openai.Extension{ExtraBody: ...}` adds fields the library does not model,
+such as an OpenAI-compatible gateway's own options, to the JSON body of a
+`Chat` or `ChatStream` request on either endpoint:
+
+```go
+req.Extensions = append(req.Extensions, openai.Extension{
+    ExtraBody: map[string]any{"prompt_cache_key": "tenant-a"},
+})
+```
+
+`llm.Options.ExtraBody` sets a client default, and the request's map is
+merged over it key by key. An extra field replaces one of the same name that
+the library builds, `reasoning_effort` and `reasoning` included, and an error
+naming an extra field is returned without the client adjusting and resending
+the request. See the [API reference](docs/api_reference.md#extra-body-fields)
+for the details.
 
 ### Ollama: embedding context length
 
