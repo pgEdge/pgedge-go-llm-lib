@@ -689,3 +689,29 @@ func TestEffectiveReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectivePromptCaching(t *testing.T) {
+	cases := []struct {
+		name          string
+		req, fallback PromptCaching
+		want          PromptCaching
+		wantErr       bool
+	}{
+		{"both unset", "", "", PromptCachingOff, false},
+		{"client default", "", PromptCachingAuto, PromptCachingAuto, false},
+		{"request wins", PromptCachingOff, PromptCachingAuto, PromptCachingOff, false},
+		{"unknown request setting", "always", "", PromptCachingOff, true},
+		{"unknown client default", "", "Auto", PromptCachingOff, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ChatRequest{PromptCaching: tc.req}.EffectivePromptCaching(tc.fallback)
+			if got != tc.want {
+				t.Errorf("caching = %q, want %q", got, tc.want)
+			}
+			if tc.wantErr != errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}

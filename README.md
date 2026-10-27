@@ -93,16 +93,17 @@ import (
 | `MaxTokens`      | `*int`              | Default response length cap. `nil` → library default of 4096. Use `llm.Int(n)`. |
 | `Temperature`    | `*float64`          | Default sampling temperature. `nil` → omitted from the request, leaving the provider's own default. Use `llm.Float(t)`. |
 | `ReasoningEffort` | `ReasoningEffort`  | Default reasoning effort (`llm.ReasoningEffortNone` through `llm.ReasoningEffortMax`). Unset → omitted, leaving the model's own default. |
+| `PromptCaching`  | `PromptCaching`     | Default automatic prompt caching (`llm.PromptCachingOff` or `llm.PromptCachingAuto`). Unset → off. |
 | `RequestTimeout` | `time.Duration`     | Wall-clock cap for a single HTTP attempt (0 → 120 s default). |
 | `MaxResponseBytes` | `int64`           | Cap on a single response body, or a whole stream; a longer response fails with an error (0 → 256 MiB default). |
 | `Retry`          | `RetryConfig`       | Retry policy (see below). |
 | `OnRetry`        | `func(RetryEvent)`  | Observability hook fired before each retry sleep. |
 | `Logger`         | `*slog.Logger`      | Diagnostics sink; `nil` keeps the library silent. Records request adjustments at Debug level (see below). |
 
-**Precedence rule:** `Temperature`, `MaxTokens` and `ReasoningEffort` on
-`ChatRequest` override the `Options` defaults for that request. A `nil` pointer
-(or an empty `ReasoningEffort`) on `ChatRequest` falls through to the `Options`
-value.
+**Precedence rule:** `Temperature`, `MaxTokens`, `ReasoningEffort` and
+`PromptCaching` on `ChatRequest` override the `Options` defaults for that
+request. A `nil` pointer (or an empty `ReasoningEffort` or `PromptCaching`) on
+`ChatRequest` falls through to the `Options` value.
 
 Leaving `Temperature` unset in both places omits the field from the upstream
 request entirely, which matters because some newer models reject any
@@ -370,6 +371,13 @@ import "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/anthropic"
 
 req = anthropic.WithToolCaching(req) // marks entire tools block as cacheable prefix
 ```
+
+To cache the conversation as well, which an agent loop resends on every step,
+set `PromptCaching: llm.PromptCachingAuto` on the request or the client
+`Options`. Anthropic then places a cache breakpoint on the last cacheable block
+of each request, alongside the tool and system markers; OpenAI and Gemini cache
+automatically, so the setting changes nothing there. See the
+[API reference](docs/api_reference.md#prompt-caching) for details.
 
 ### Anthropic: extended thinking
 

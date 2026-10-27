@@ -50,27 +50,50 @@ func (c *client) omitTemperature() bool {
 }
 
 // maxSends bounds the requests one Chat or ChatStream call makes, so a
-// chain of adjustments (temperature, thinking type and effort level,
-// each rejected in turn) can complete without looping.
-const maxSends = 4
+// chain of adjustments (temperature, thinking type, effort level and
+// the cache_control marker, each rejected in turn) can complete
+// without looping.
+const maxSends = 5
 
 // Adjustment names, used as the "param" attribute in log records.
 const (
 	adjustTemperature = "temperature"
 	adjustThinking    = "thinking"
 	adjustEffort      = "effort"
+	adjustCaching     = "cache_control"
 )
 
-// checkReasoningEffort returns an error for a request whose reasoning
-// effort, or the client default it falls back to, is not a recognised
-// level, so that it fails before any network call.
-func (c *client) checkReasoningEffort(req llm.ChatRequest) error {
+// adjustCachingThisCall marks, in a call's applied adjustments, a
+// top-level cache_control marker dropped for that call only, because
+// the rejection could be about a block marker; see adaptToRejection.
+const adjustCachingThisCall = adjustCaching + "/this call"
+
+// checkRequest returns an error for a request whose reasoning effort or
+// prompt caching setting, or the client default it falls back to, is
+// not recognised, so that it fails before any network call.
+func (c *client) checkRequest(req llm.ChatRequest) error {
 	_, err := req.EffectiveReasoningEffort(c.opts.ReasoningEffort)
+	if err == nil {
+		_, err = req.EffectivePromptCaching(c.opts.PromptCaching)
+	}
 	var pe *llm.ProviderError
 	if errors.As(err, &pe) {
 		pe.Provider = providerName
 	}
 	return err
+}
+
+// autoCaching reports whether to send the top-level cache_control
+// marker for req: when the request, or else the client default, asks
+// for automatic prompt caching and the API has not rejected it.
+func (c *client) autoCaching(req llm.ChatRequest) bool {
+	p, err := req.EffectivePromptCaching(c.opts.PromptCaching)
+	if err != nil || p != llm.PromptCachingAuto {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.dropAutoCaching
 }
 
 // effortLevels maps each llm.ReasoningEffort that Anthropic sends as
@@ -138,6 +161,13 @@ func (c *client) setReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRequ
 //     temperatureRejectedForThinking.
 //   - Effort level or thinking type set from ReasoningEffort: the client
 //     omits that level or type from every later request.
+//   - The top-level cache_control marker from PromptCachingAuto, which
+//     some Anthropic-compatible endpoints do not accept: the client
+//     omits it from every later request. When the request also carried
+//     block markers, the rejection could be about one of those, so the
+//     marker is omitted for this call only, and remembered once a
+//     resend without it succeeds (see confirmAdjustments); if that
+//     resend fails the same way, the error stands.
 //
 // Thinking the Extension set ("enabled") is the caller's explicit
 // choice and is never dropped.
@@ -175,6 +205,16 @@ func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRe
 		}
 		return adjustEffort
 
+	case sent.CacheControl != nil && strings.Contains(msg, "cache_control"):
+		if blockMarkers(sent) > 0 {
+			c.logAdjustment(adjustCaching, "omitted for this request")
+			return adjustCachingThisCall
+		}
+		if c.learn(&c.dropAutoCaching) {
+			c.logAdjustment(adjustCaching, "omitted")
+		}
+		return adjustCaching
+
 	case sent.Thinking != nil && sent.Thinking.Type != "enabled" &&
 		strings.Contains(msg, "thinking") && !strings.Contains(msg, "temperature"):
 		if c.learnRejected(&c.rejectedThinking, sent.Thinking.Type) {
@@ -199,6 +239,34 @@ func temperatureRejectedForThinking(sent *anthropicChatRequest, msg string) bool
 		return false
 	}
 	return sent.Thinking.Type == "enabled" || strings.Contains(msg, "thinking")
+}
+
+// maxCacheBreakpoints is the most cache_control markers Anthropic
+// accepts in one request, the top-level marker included.
+const maxCacheBreakpoints = 4
+
+// blockMarkers counts the tool, system and message blocks a request
+// marks with cache_control.
+func blockMarkers(aReq *anthropicChatRequest) int {
+	n := 0
+	for _, t := range aReq.Tools {
+		if t.CacheControl != nil {
+			n++
+		}
+	}
+	for _, s := range aReq.System {
+		if s.CacheControl != nil {
+			n++
+		}
+	}
+	for _, m := range aReq.Messages {
+		for _, b := range m.Content {
+			if b.CacheControl != nil {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // learn sets a learned flag and reports whether it was newly set, so
@@ -232,6 +300,27 @@ func (c *client) logAdjustment(param, action string) {
 			"model", c.model,
 			"param", param,
 			"action", action)
+	}
+}
+
+// omitForCall clears from aReq what an earlier rejection in the same
+// call dropped for that call only.
+func omitForCall(aReq *anthropicChatRequest, applied map[string]bool) {
+	if applied[adjustTemperature] {
+		aReq.Temperature = nil
+	}
+	if applied[adjustCachingThisCall] {
+		aReq.CacheControl = nil
+	}
+}
+
+// confirmAdjustments runs once a call's request has been accepted. A
+// top-level cache_control marker dropped for the call alone was the
+// cause of the rejection, since the resend without it succeeded, so
+// it is now omitted from every later request.
+func (c *client) confirmAdjustments(applied map[string]bool) {
+	if applied[adjustCachingThisCall] && c.learn(&c.dropAutoCaching) {
+		c.logAdjustment(adjustCaching, "omitted")
 	}
 }
 

@@ -50,6 +50,9 @@ type client struct {
 	// levels the model rejects, which are then omitted.
 	rejectedThinking map[string]bool
 	rejectedEffort   map[string]bool
+
+	// Learned: the API rejects the top-level cache_control marker.
+	dropAutoCaching bool
 }
 
 // New creates a new Anthropic client.
@@ -172,7 +175,10 @@ type anthropicChatRequest struct {
 	StopSequences []string             `json:"stop_sequences,omitempty"`
 	Thinking      *anthropicThinking   `json:"thinking,omitempty"`
 	OutputConfig  *anthropicOutputCfg  `json:"output_config,omitempty"`
-	Stream        bool                 `json:"stream,omitempty"`
+	// CacheControl is the top-level marker for automatic prompt
+	// caching (llm.PromptCachingAuto).
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+	Stream       bool                   `json:"stream,omitempty"`
 }
 
 // anthropicThinking is the wire shape for Anthropic's thinking setting.
@@ -271,16 +277,13 @@ type anthropicUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	if err := c.checkReasoningEffort(req); err != nil {
+	if err := c.checkRequest(req); err != nil {
 		return nil, err
 	}
-	dropTemperature := false // this call only; see adaptToRejection
-	applied := map[string]bool{}
+	applied := map[string]bool{} // see retryAfterRejection
 	for sends := 1; ; sends++ {
 		aReq := c.buildChatRequest(req, false)
-		if dropTemperature {
-			aReq.Temperature = nil
-		}
+		omitForCall(&aReq, applied)
 
 		var aResp anthropicChatResponse
 		status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
@@ -290,11 +293,11 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 		}
 		if status < 200 || status >= 300 {
 			if c.retryAfterRejection(status, body, &aReq, applied, sends) {
-				dropTemperature = dropTemperature || applied[adjustTemperature]
 				continue
 			}
 			return nil, c.mapError(status, body)
 		}
+		c.confirmAdjustments(applied)
 		if err != nil {
 			return nil, c.decodeError(status, err)
 		}
@@ -420,6 +423,15 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicCha
 	// StopSequences: passed directly as stop_sequences.
 	if len(req.StopSequences) > 0 {
 		aReq.StopSequences = req.StopSequences
+	}
+
+	// Automatic prompt caching: per-request → client default → off,
+	// and omitted once the API has rejected it. The marker sits beside
+	// any block markers rather than replacing them, but counts towards
+	// Anthropic's limit of maxCacheBreakpoints per request, so it is
+	// left out when the blocks already use them all.
+	if c.autoCaching(req) && blockMarkers(&aReq) < maxCacheBreakpoints {
+		aReq.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
 	}
 
 	return aReq
@@ -552,17 +564,14 @@ func (c *client) parseChatResponse(aResp *anthropicChatResponse) *llm.ChatRespon
 // ---------- ChatStream ----------
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
-	if err := c.checkReasoningEffort(req); err != nil {
+	if err := c.checkRequest(req); err != nil {
 		return nil, err
 	}
 	var resp *http.Response
-	dropTemperature := false // this call only; see adaptToRejection
-	applied := map[string]bool{}
+	applied := map[string]bool{} // see retryAfterRejection
 	for sends := 1; ; sends++ {
 		aReq := c.buildChatRequest(req, true)
-		if dropTemperature {
-			aReq.Temperature = nil
-		}
+		omitForCall(&aReq, applied)
 
 		var err error
 		resp, err = httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
@@ -571,13 +580,13 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 			return nil, err
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			c.confirmAdjustments(applied)
 			break
 		}
 
 		body := httpclient.ReadErrorBody(resp.Body)
 		resp.Body.Close()
 		if c.retryAfterRejection(resp.StatusCode, body, &aReq, applied, sends) {
-			dropTemperature = dropTemperature || applied[adjustTemperature]
 			continue
 		}
 		return nil, c.mapError(resp.StatusCode, body)

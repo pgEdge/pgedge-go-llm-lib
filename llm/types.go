@@ -237,6 +237,63 @@ type ChatRequest struct {
 	// and when both are unset the field is left out of the request; see
 	// ReasoningEffort for how each provider translates it.
 	ReasoningEffort ReasoningEffort
+	// PromptCaching selects automatic prompt caching. The zero value
+	// falls through to Options.PromptCaching, and when both are unset
+	// caching is off; see PromptCaching.
+	PromptCaching PromptCaching
+}
+
+// PromptCaching selects whether a provider caches the conversation
+// prefix automatically. On Anthropic, PromptCachingAuto sends the
+// top-level cache_control {type: "ephemeral"}, which places a cache
+// breakpoint on the last cacheable block of each request, so the
+// conversation an agent loop resends on every step is read from the
+// cache rather than billed at the full input rate; the tool and system
+// markers set through the anthropic Extension still apply alongside it.
+// OpenAI and Gemini cache automatically, so the setting changes nothing
+// there, and other providers ignore it. Providers that honour the
+// setting return an error wrapping ErrInvalidRequest, before sending,
+// for a value that is not one of the constants below.
+type PromptCaching string
+
+// PromptCaching values recognised by ChatRequest.PromptCaching and
+// Options.PromptCaching.
+const (
+	PromptCachingDefault PromptCaching = ""     // use the client default, else off
+	PromptCachingOff     PromptCaching = "off"  // no automatic caching
+	PromptCachingAuto    PromptCaching = "auto" // cache the conversation prefix
+)
+
+// Valid reports whether p is the zero value or one of the recognised
+// settings.
+func (p PromptCaching) Valid() bool {
+	switch p {
+	case PromptCachingDefault, PromptCachingOff, PromptCachingAuto:
+		return true
+	}
+	return false
+}
+
+// EffectivePromptCaching returns the request's prompt caching setting,
+// or clientDefault when the request leaves it unset, and
+// PromptCachingOff when both are unset. The error, for a setting that
+// is not recognised, is a *ProviderError wrapping ErrInvalidRequest
+// with Provider unset; providers fill it in.
+func (r ChatRequest) EffectivePromptCaching(clientDefault PromptCaching) (PromptCaching, error) {
+	p := r.PromptCaching
+	if p == PromptCachingDefault {
+		p = clientDefault
+	}
+	if !p.Valid() {
+		return PromptCachingOff, &ProviderError{
+			Err:     ErrInvalidRequest,
+			Message: fmt.Sprintf("unknown prompt caching setting %q", string(p)),
+		}
+	}
+	if p == PromptCachingDefault {
+		p = PromptCachingOff
+	}
+	return p, nil
 }
 
 // ReasoningEffort is a provider-neutral reasoning effort level. Each
@@ -421,12 +478,12 @@ type RetryConfig struct {
 // Options configures an LLM client.
 //
 // Precedence rule: fields that appear on BOTH Options and ChatRequest
-// (Temperature, MaxTokens, ReasoningEffort) are CLIENT-LEVEL DEFAULTS
-// on Options.
+// (Temperature, MaxTokens, ReasoningEffort, PromptCaching) are
+// CLIENT-LEVEL DEFAULTS on Options.
 // When the same field is set on a per-request ChatRequest, the
 // per-request value takes precedence. A nil pointer (or, for
-// ReasoningEffort, the zero value) on a ChatRequest field falls through
-// to the Options default.
+// ReasoningEffort and PromptCaching, the zero value) on a ChatRequest
+// field falls through to the Options default.
 //
 // Fields that appear ONLY on Options (APIKey, Model, BaseURL,
 // CustomHeaders, Retry, RequestTimeout, HTTPClient, OnRetry, Extensions)
@@ -483,6 +540,11 @@ type Options struct {
 	// the same name, used when a request leaves it unset. The zero
 	// value leaves reasoning effort to the model.
 	ReasoningEffort ReasoningEffort
+
+	// PromptCaching is the client default for ChatRequest's field of
+	// the same name, used when a request leaves it unset. The zero
+	// value means off.
+	PromptCaching PromptCaching
 
 	// RequestTimeout caps the wall-clock time of a single HTTP request,
 	// including all retries. Zero (default) uses the library's
