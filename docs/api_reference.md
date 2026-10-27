@@ -97,8 +97,9 @@ type ProviderConstructor func(opts Options) (Client, error)
 ## Options
 
 `Options` configures an LLM client. Fields that overlap with
-`ChatRequest` (`Temperature`, `MaxTokens`, `ReasoningEffort`) are
-client-level defaults; `ChatRequest` fields override them per-request.
+`ChatRequest` (`Temperature`, `MaxTokens`, `ReasoningEffort`,
+`PromptCaching`) are client-level defaults; `ChatRequest` fields
+override them per-request.
 
 ```go
 type Options struct {
@@ -110,6 +111,7 @@ type Options struct {
     MaxTokens     *int
     Temperature   *float64
     ReasoningEffort ReasoningEffort
+    PromptCaching PromptCaching
     RequestTimeout time.Duration
     PerAttemptTimeout time.Duration
     MaxResponseBytes int64
@@ -128,6 +130,7 @@ type Options struct {
 | `MaxTokens`      | `4096`      | Default response length cap. Use `llm.Int(n)`. |
 | `Temperature`    | omitted     | Default sampling temperature. Unset means the field is left out of the upstream request, so the provider's own default applies; some newer models reject any temperature value. Use `llm.Float(t)`. |
 | `ReasoningEffort` | omitted    | Default reasoning effort; see [Reasoning effort](#reasoning-effort). |
+| `PromptCaching` | off         | Default automatic prompt caching; see [Prompt caching](#prompt-caching). |
 | `RequestTimeout` | `120s`      | Wall-clock cap per request, spanning all retries. |
 | `PerAttemptTimeout` | `0` (off) | Wall-clock cap per attempt; makes slow attempts retryable. Set below `RequestTimeout`. |
 | `MaxResponseBytes` | `256 MiB` | Cap on a single response body, or a whole stream; a longer response fails with an error. |
@@ -315,6 +318,7 @@ type ChatRequest struct {
     ToolChoice     *ToolChoice
     StopSequences  []string
     ReasoningEffort ReasoningEffort
+    PromptCaching  PromptCaching
 }
 ```
 
@@ -330,6 +334,7 @@ type ChatRequest struct {
 | `ToolChoice`     | Control tool-selection behaviour; see `ToolChoiceMode`. |
 | `StopSequences`  | Strings that terminate generation (most providers cap at 4). |
 | `ReasoningEffort` | Override client default (`""` → use `Options.ReasoningEffort`); see [Reasoning effort](#reasoning-effort). |
+| `PromptCaching` | Override client default (`""` → use `Options.PromptCaching`); see [Prompt caching](#prompt-caching). |
 
 ### Reasoning effort
 
@@ -372,6 +377,30 @@ omitted for that call only.
 Anthropic does not allow a temperature other than 1 alongside
 thinking, so a request that carries adaptive thinking leaves any
 other temperature out.
+
+### Prompt caching
+
+`PromptCaching` is `llm.PromptCachingOff` (the default when unset on
+both `ChatRequest` and `Options`) or `llm.PromptCachingAuto`. On
+Anthropic, `Auto` sends the top-level `cache_control: {type:
+"ephemeral"}`, which places a cache breakpoint on the last cacheable
+block and moves it forward as the conversation grows, so an agent
+loop's resent history is read from the cache. Anthropic bills a cache
+write at 1.25 times the input rate and a read at 0.1 times, so one
+reuse of the prefix pays for the write.
+
+The markers from `anthropic.WithToolCaching`, `WithSystemCaching` and
+`ContentBlock.CacheControl` still apply alongside it. The automatic
+marker counts towards Anthropic's limit of four breakpoints per
+request, so it is left out of a request whose blocks already carry
+four. An endpoint that rejects the top-level marker, as some
+Anthropic-compatible ones do, has it dropped and remembered in the
+same way as a rejected temperature, unless the request also carries
+block markers, which the rejection could be about.
+
+OpenAI and Gemini cache automatically, so `Auto` changes nothing
+there, and other providers ignore it. An unknown value fails with
+`ErrInvalidRequest` before sending on Anthropic.
 
 ---
 
@@ -511,8 +540,9 @@ const CacheControlEphemeral CacheControlType = "ephemeral"
 
 Anthropic-specific. Set `Type: "ephemeral"` on a `ContentBlock`
 to mark it as a prompt-cache prefix boundary. In practice use
-`anthropic.WithToolCaching` or `anthropic.WithSystemCaching`
-rather than setting this directly.
+`PromptCaching: llm.PromptCachingAuto` for the conversation, with
+`anthropic.WithToolCaching` or `anthropic.WithSystemCaching` for the
+tools and system prompt, rather than setting this directly.
 
 ---
 

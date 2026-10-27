@@ -784,3 +784,17 @@ func TestAdapt_MessageOnlyEffortRejectionWithTools(t *testing.T) {
 		}
 	})
 }
+
+func TestPromptCachingChangesNothing(t *testing.T) {
+	// OpenAI caches automatically, so the setting adds nothing.
+	for _, responses := range []bool{false, true} {
+		srv, requests := adaptServer(t)
+		c := newAdaptClient(t, srv.URL, nil, Extension{ResponsesAPI: llm.Bool(responses)})
+		if _, err := call(t, c, false, llm.ChatRequest{PromptCaching: llm.PromptCachingAuto}); err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if got := requests(); got[0].has("cache_control") || got[0].has("prompt_cache_key") {
+			t.Errorf("request should carry no caching fields: %v", got[0].body)
+		}
+	}
+}
