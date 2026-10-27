@@ -32,6 +32,8 @@ The Anthropic provider supports the following features:
   `anthropic.WithSystemCaching` helpers and `CacheControl` markers
   on `ContentBlock` values.
 - extended thinking mode via `anthropic.WithExtendedThinking`.
+- thinking blocks returned on the response, from `Chat` and
+  `ChatStream` alike, so they can be sent back with a tool result.
 - cumulative token usage tracking with cache metrics
   (`CacheCreationInputTokens`, `CacheReadInputTokens`).
 
@@ -45,6 +47,17 @@ rejection may be down to thinking rather than the model. Other
 invalid request errors, such as a
 temperature outside the permitted range, are returned to the
 caller unchanged.
+
+When thinking is on, the response carries the model's reasoning
+as `BlockThinking` and `BlockRedactedThinking` content blocks,
+ahead of the text or tool call they led to. Anthropic requires
+these blocks to come back, unchanged and in their original order,
+in the assistant turn sent with a tool result, which happens when
+you append the response's content to the conversation as it
+stands. If the API rejects a replayed block's signature because
+the conversation ahead of it changed, the provider removes every
+thinking block from that request's history and resends it once.
+The other providers leave thinking blocks out of their requests.
 
 The Anthropic provider does not support embeddings. Calling
 `Embed` or `EmbedBatch` returns an `ErrNotSupported` error.

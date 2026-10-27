@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 )
 
@@ -417,4 +418,95 @@ func TestStreamCollectDrainsAllBlockTypesAfterError(t *testing.T) {
 				i, sawText, sawTool, resp.Content)
 		}
 	}
+}
+
+// thinkingChunks scripts a stream holding two adjacent thinking blocks
+// (one with its text omitted, so only a signature arrives), a redacted
+// block, a tool call and a done chunk.
+func thinkingChunks() []StreamChunk {
+	return []StreamChunk{
+		{Type: ChunkThinkingStart, Thinking: &Thinking{}},
+		{Type: ChunkThinkingDelta, Thinking: &Thinking{Text: "Let me "}},
+		{Type: ChunkThinkingDelta, Thinking: &Thinking{Text: "think."}},
+		{Type: ChunkThinkingDelta, Thinking: &Thinking{Signature: "sig-A"}},
+		{Type: ChunkThinkingStart, Thinking: &Thinking{}},
+		{Type: ChunkThinkingDelta, Thinking: &Thinking{Signature: "sig-B"}},
+		{Type: ChunkThinkingStart, Thinking: &Thinking{Data: "opaque-data"}},
+		{Type: ChunkToolUseStart, ToolUse: &ToolUse{ID: "tu_1", Name: "search"}},
+		{Type: ChunkToolUseDelta, Partial: `{}`},
+		{Type: ChunkDone, Usage: &TokenUsage{TotalTokens: 5}},
+	}
+}
+
+// wantThinkingContent is what thinkingChunks assembles into.
+var wantThinkingContent = []ContentBlock{
+	{Type: BlockThinking, Thinking: &Thinking{Text: "Let me think.", Signature: "sig-A"}},
+	{Type: BlockThinking, Thinking: &Thinking{Signature: "sig-B"}},
+	{Type: BlockRedactedThinking, Thinking: &Thinking{Data: "opaque-data"}},
+	{Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "search", Input: json.RawMessage(`{}`)}},
+}
+
+func TestStreamCollectAssemblesThinkingBlocks(t *testing.T) {
+	// Each thinking block has to come back whole and in order, since
+	// Anthropic rejects a tool-use turn whose blocks were changed.
+	src := thinkingChunks()
+	chunks := make(chan StreamChunk, len(src))
+	errCh := make(chan error, 1)
+	for _, c := range src {
+		chunks <- c
+	}
+	close(chunks)
+	close(errCh)
+
+	resp, err := (&Stream{Chunks: chunks, Err: errCh}).Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !reflect.DeepEqual(resp.Content, wantThinkingContent) {
+		t.Errorf("Content = %s, want %s", mustJSON(t, resp.Content), mustJSON(t, wantThinkingContent))
+	}
+}
+
+func TestStreamCollectAssemblesThinkingBlocksOnError(t *testing.T) {
+	// The drain loop that runs after an error assembles the same
+	// blocks as the main loop.
+	src := thinkingChunks()
+	src = src[:len(src)-1]
+	chunks := make(chan StreamChunk, len(src))
+	errCh := make(chan error, 1)
+	errCh <- errors.New("boom")
+	for _, c := range src {
+		chunks <- c
+	}
+	close(chunks)
+	close(errCh)
+
+	// The error races the buffered chunks, and whichever loop reads
+	// them, every one is assembled.
+	resp, err := (&Stream{Chunks: chunks, Err: errCh}).Collect(context.Background())
+	if err == nil {
+		t.Fatal("Collect: want error")
+	}
+	if !reflect.DeepEqual(resp.Content, wantThinkingContent) {
+		t.Errorf("Content = %s, want %s", mustJSON(t, resp.Content), mustJSON(t, wantThinkingContent))
+	}
+}
+
+func TestThinkingDeltaWithoutStartIgnored(t *testing.T) {
+	var a ThinkingAccumulator
+	if _, ok := a.Add(StreamChunk{Type: ChunkThinkingDelta, Thinking: &Thinking{Text: "x"}}); ok {
+		t.Error("Add returned a block")
+	}
+	if b, ok := a.Flush(); ok {
+		t.Errorf("Flush = %+v, want nothing", b)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
 }

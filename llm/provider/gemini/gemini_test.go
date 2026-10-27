@@ -3178,3 +3178,36 @@ func TestChatStreamOversizedIsAnError(t *testing.T) {
 		})
 	}
 }
+
+// thinkingTurn is an assistant turn from Anthropic with thinking on,
+// replayed through another provider.
+var thinkingTurn = llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+	{Type: llm.BlockThinking, Thinking: &llm.Thinking{Text: "secret-reasoning", Signature: "sig-A"}},
+	{Type: llm.BlockRedactedThinking, Thinking: &llm.Thinking{Data: "opaque-data"}},
+	{Type: llm.BlockText, Text: "Checking."},
+	{Type: llm.BlockToolUse, ToolUse: &llm.ToolUse{ID: "tu_1", Name: "get_weather", Input: json.RawMessage(`{}`)}},
+}}
+
+// assertNoThinking fails if any part of a thinking block reached v's
+// JSON, whilst the turn's text and tool call did.
+func assertNoThinking(t *testing.T, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, s := range []string{"secret-reasoning", "sig-A", "opaque-data", "thinking"} {
+		if strings.Contains(string(b), s) {
+			t.Errorf("%q reached the wire: %s", s, b)
+		}
+	}
+	for _, s := range []string{"Checking.", "get_weather"} {
+		if !strings.Contains(string(b), s) {
+			t.Errorf("%q missing from the wire: %s", s, b)
+		}
+	}
+}
+
+func TestConvertMessageSkipsThinkingBlocks(t *testing.T) {
+	assertNoThinking(t, convertMessage(thinkingTurn, map[string]string{}))
+}

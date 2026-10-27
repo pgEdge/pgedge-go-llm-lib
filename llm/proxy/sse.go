@@ -55,12 +55,13 @@ func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResp
 		}
 	}
 
-	// Accumulator state mirrors Stream.Collect: text and tool-use
-	// deltas merge into their owning content block, flushed when a
-	// boundary chunk arrives.
+	// Accumulator state mirrors Stream.Collect: text, tool-use and
+	// thinking deltas merge into their owning content block, flushed
+	// when a boundary chunk arrives.
 	var textBuf strings.Builder
 	var toolBuf strings.Builder
 	var currentTool *llm.ToolUse
+	var thinking llm.ThinkingAccumulator
 
 	flushText := func() {
 		if textBuf.Len() > 0 {
@@ -76,14 +77,24 @@ func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResp
 			toolBuf.Reset()
 		}
 	}
+	flushThinking := func() {
+		if b, ok := thinking.Flush(); ok {
+			resp.Content = append(resp.Content, b)
+		}
+	}
+	flushAll := func() {
+		flushText()
+		flushTool()
+		flushThinking()
+	}
 	accumulate := func(chunk llm.StreamChunk) {
 		switch chunk.Type {
 		case llm.ChunkText:
 			flushTool()
+			flushThinking()
 			textBuf.WriteString(chunk.Text)
 		case llm.ChunkToolUseStart:
-			flushText()
-			flushTool()
+			flushAll()
 			if chunk.ToolUse != nil {
 				currentTool = &llm.ToolUse{ID: chunk.ToolUse.ID, Name: chunk.ToolUse.Name, Input: chunk.ToolUse.Input, Signature: chunk.ToolUse.Signature}
 				if len(currentTool.Input) > 0 {
@@ -92,6 +103,11 @@ func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResp
 			}
 		case llm.ChunkToolUseDelta:
 			toolBuf.WriteString(chunk.Partial)
+		case llm.ChunkThinkingStart:
+			flushAll()
+			thinking.Add(chunk)
+		case llm.ChunkThinkingDelta:
+			thinking.Add(chunk)
 		}
 	}
 
@@ -106,23 +122,20 @@ func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResp
 				fmt.Fprintf(w, "event: done\ndata: %s\n\n", payload)
 				flush()
 			}
-			flushText()
-			flushTool()
+			flushAll()
 			return resp, nil
 		}
 		if err != nil {
 			payload, _ := json.Marshal(ErrorResponse{Error: redact.Message(err.Error(), secrets...)})
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
 			flush()
-			flushText()
-			flushTool()
+			flushAll()
 			return resp, err
 		}
 
 		payload, mErr := json.Marshal(chunk)
 		if mErr != nil {
-			flushText()
-			flushTool()
+			flushAll()
 			return resp, fmt.Errorf("marshal chunk: %w", mErr)
 		}
 
@@ -132,8 +145,7 @@ func writeSSE(w io.Writer, stream *llm.Stream, secrets ...string) (*llm.ChatResp
 			}
 			fmt.Fprintf(w, "event: done\ndata: %s\n\n", payload)
 			flush()
-			flushText()
-			flushTool()
+			flushAll()
 			// sawDone is intentionally not flipped here; this branch
 			// returns immediately and only the EOF branch reads it.
 			return resp, nil

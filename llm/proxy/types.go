@@ -25,8 +25,9 @@ import "github.com/pgEdge/pgedge-go-llm-lib/llm"
 // only. If empty, the proxy's DefaultProvider and the per-provider
 // configured Model are used.
 //
-// Each Message.Content must be a JSON array of typed content blocks
-// — text, tool_use, tool_result, or image. The legacy form
+// Each Message.Content must be a JSON array of typed content blocks:
+// text, tool_use, tool_result, image, document, thinking or
+// redacted_thinking. The legacy form
 // (`"content": "string"`) is no longer accepted; clients must always
 // send the array form. See llm.ContentBlock for the per-block fields.
 type ChatRequest struct {
@@ -188,7 +189,9 @@ type ErrorResponse struct {
 //
 // Each chunk-json is the JSON marshalling of llm.StreamChunk:
 //
-//	{"type":"text","text":"..."}                  — incremental text
-//	{"type":"tool_use_start","tool_use":{...}}    — tool call started
-//	{"type":"tool_use_delta","partial":"..."}     — tool args fragment
-//	{"type":"done","usage":{...}}                 — terminator
+//	{"type":"text","text":"..."}                  (incremental text)
+//	{"type":"tool_use_start","tool_use":{...}}    (tool call started)
+//	{"type":"tool_use_delta","partial":"..."}     (tool args fragment)
+//	{"type":"thinking_start","thinking":{...}}    (reasoning block started)
+//	{"type":"thinking_delta","thinking":{...}}    (reasoning text or signature fragment)
+//	{"type":"done","usage":{...}}                 (terminator)

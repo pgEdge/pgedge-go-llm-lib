@@ -41,6 +41,8 @@ type Message struct {
 //	BlockDocument   -> Document
 //	BlockToolUse    -> ToolUse
 //	BlockToolResult -> ToolUseID, Text, optional IsError
+//	BlockThinking   -> Thinking (Text and Signature)
+//	BlockRedactedThinking -> Thinking (Data)
 //
 // CacheControl is an Anthropic-specific marker for prompt caching;
 // other providers ignore it.
@@ -65,6 +67,9 @@ type ContentBlock struct {
 
 	// IsError — populated for BlockToolResult when the tool errored.
 	IsError bool `json:"is_error,omitempty"`
+
+	// Thinking: populated for BlockThinking and BlockRedactedThinking.
+	Thinking *Thinking `json:"thinking,omitempty"`
 
 	// CacheControl — Anthropic-specific marker for prompt caching.
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
@@ -115,6 +120,33 @@ type ToolUse struct {
 	// ordinary tool-calling loop does anyway. Never synthesise or
 	// modify a value here.
 	Signature string `json:"signature,omitempty"`
+}
+
+// Thinking carries a block of the model's reasoning, as returned by
+// Anthropic when thinking is on. It is kept separate from text, so a
+// caller reading the Text of a response's blocks never sees it.
+//
+// Anthropic requires every thinking and redacted-thinking block in an
+// assistant turn that made a tool call to come back, unchanged and in
+// its original order, on the request carrying the tool result, and
+// recommends sending them back on later turns as well. Callers need do
+// nothing beyond keeping assistant messages intact when appending a
+// tool result, which is what the ordinary tool-calling loop does
+// anyway. Treat every field as opaque: never synthesise or modify one.
+// Other providers ignore these blocks.
+type Thinking struct {
+	// Text is the reasoning text of a BlockThinking. It may be empty
+	// even though the block is complete: newer models return thinking
+	// without its text by default, and the reasoning is carried by the
+	// Signature alone.
+	Text string `json:"text,omitempty"`
+
+	// Signature is the opaque token Anthropic uses to verify a
+	// BlockThinking when it is sent back.
+	Signature string `json:"signature,omitempty"`
+
+	// Data is the encrypted reasoning of a BlockRedactedThinking.
+	Data string `json:"data,omitempty"`
 }
 
 // Tool defines a tool/function available for the LLM to call.
@@ -816,6 +848,11 @@ const (
 	BlockDocument   ContentBlockType = "document"
 	BlockToolUse    ContentBlockType = "tool_use"
 	BlockToolResult ContentBlockType = "tool_result"
+
+	// BlockThinking and BlockRedactedThinking carry the model's
+	// reasoning in an assistant message; see Thinking.
+	BlockThinking         ContentBlockType = "thinking"
+	BlockRedactedThinking ContentBlockType = "redacted_thinking"
 )
 
 // CacheControlType identifies the cache scope for prompt-caching.

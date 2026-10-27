@@ -15,6 +15,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -82,11 +83,13 @@ func newEffortClient(t *testing.T, url string, opts llm.Options) llm.Client {
 	return c
 }
 
-// sendEffort makes a Chat or ChatStream call with req and returns its
-// error.
+// sendEffort makes a Chat or ChatStream call with req, or with
+// hiRequest's messages when req has none, and returns its error.
 func sendEffort(t *testing.T, c llm.Client, stream bool, req llm.ChatRequest) error {
 	t.Helper()
-	req.Messages = hiRequest.Messages
+	if req.Messages == nil {
+		req.Messages = hiRequest.Messages
+	}
 	if !stream {
 		_, err := c.Chat(context.Background(), req)
 		return err
@@ -266,14 +269,18 @@ func TestDisabledThinkingRejected(t *testing.T) {
 }
 
 func TestEffortRejectionsChained(t *testing.T) {
-	// Temperature, thinking, effort and the top-level cache_control
-	// marker refused in turn take five sends, the most one call makes.
-	// The temperature is 1, the only value Anthropic allows alongside
-	// thinking, so it is sent with adaptive thinking.
+	// Temperature, thinking, effort, the top-level cache_control marker
+	// and the replayed thinking blocks refused in turn take six sends,
+	// the most one call makes. The temperature is 1, the only value
+	// Anthropic allows alongside thinking, so it is sent with adaptive
+	// thinking.
 	effortModes(t, func(t *testing.T, stream bool) {
-		srv, requests := effortServer(t, temperatureDeprecatedBody, adaptiveRejected, effortRejected, cacheControlRejected)
+		srv, requests := effortServer(t, temperatureDeprecatedBody, adaptiveRejected, effortRejected,
+			cacheControlRejected, signatureRejected)
 		c := newEffortClient(t, srv.URL, llm.Options{Temperature: llm.Float(1), PromptCaching: llm.PromptCachingAuto})
-		if err := sendEffort(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortMax}); err != nil {
+		req := thinkingHistory()
+		req.ReasoningEffort = llm.ReasoningEffortMax
+		if err := sendEffort(t, c, stream, req); err != nil {
 			t.Fatalf("call: %v", err)
 		}
 		got := requests()
@@ -285,6 +292,9 @@ func TestEffortRejectionsChained(t *testing.T) {
 			if _, has := last[key]; has {
 				t.Errorf("final request should omit %s: %v", key, last)
 			}
+		}
+		if types := assistantBlockTypes(t, last); !reflect.DeepEqual(types, []string{"tool_use"}) {
+			t.Errorf("final request assistant blocks = %v, want only tool_use", types)
 		}
 	})
 }

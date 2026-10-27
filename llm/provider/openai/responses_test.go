@@ -1349,3 +1349,7 @@ func TestResponsesAPI_StreamOversizedIsAnError(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildResponsesInputSkipsThinkingBlocks(t *testing.T) {
+	assertNoThinking(t, buildResponsesInput([]llm.Message{thinkingTurn}))
+}

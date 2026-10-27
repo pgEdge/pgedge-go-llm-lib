@@ -237,6 +237,7 @@ type ContentBlock struct {
     ToolUse      *ToolUse         `json:"tool_use,omitempty"`
     ToolUseID    string           `json:"tool_use_id,omitempty"`
     IsError      bool             `json:"is_error,omitempty"`
+    Thinking     *Thinking        `json:"thinking,omitempty"`
     CacheControl *CacheControl    `json:"cache_control,omitempty"`
 }
 ```
@@ -250,6 +251,8 @@ type ContentBlock struct {
 | `llm.BlockDocument`    | `"document"`    | `Document` |
 | `llm.BlockToolUse`     | `"tool_use"`    | `ToolUse` |
 | `llm.BlockToolResult`  | `"tool_result"` | `ToolUseID`, `Text`, `IsError` |
+| `llm.BlockThinking`    | `"thinking"`    | `Thinking` (`Text`, `Signature`) |
+| `llm.BlockRedactedThinking` | `"redacted_thinking"` | `Thinking` (`Data`) |
 
 `CacheControl` is Anthropic-specific; other providers ignore it.
 
@@ -562,6 +565,39 @@ shown in the Tool Calling document already does.
 
 ---
 
+## Thinking
+
+```go
+type Thinking struct {
+    Text      string `json:"text,omitempty"`
+    Signature string `json:"signature,omitempty"`
+    Data      string `json:"data,omitempty"`
+}
+```
+
+`Thinking` carries a block of the model's reasoning, which
+Anthropic returns when thinking is on: `Text` and `Signature` for
+a `BlockThinking`, and the encrypted `Data` for a
+`BlockRedactedThinking`. `Text` may be empty in a complete block,
+since newer models leave the text out by default and the
+`Signature` alone carries the reasoning.
+
+Anthropic requires every thinking block in an assistant turn that
+made a tool call to come back, unchanged and in its original
+order, with the tool result, so preserve assistant messages intact
+rather than rebuilding them. Thinking is kept apart from `Text`
+blocks, so code that reads a response's text never sees it, and
+other providers ignore these blocks when a conversation is
+replayed through them. Treat every field as opaque.
+
+If the conversation ahead of a replayed thinking block has
+changed, for example because the system prompt or tools were
+rebuilt, Anthropic can reject the block's signature. The provider
+then removes every thinking block from that request's history and
+sends it once more, which is the recovery Anthropic documents.
+
+---
+
 ## ProviderExtension
 
 ```go
@@ -660,17 +696,24 @@ Prefer `Stream.Recv()` over reading channels directly.
 `Stream.Collect(ctx context.Context) (*ChatResponse, error)`
 drains the stream and assembles the full response.
 
+`ThinkingAccumulator` assembles `ChunkThinkingStart` and
+`ChunkThinkingDelta` chunks into thinking content blocks, for a
+consumer that reads chunks itself. `Add(chunk)` returns the block a
+new start chunk ends, if any, and `Flush()` returns the block in
+progress; each reports whether it returned one.
+
 ---
 
 ## StreamChunk
 
 ```go
 type StreamChunk struct {
-    Type    StreamChunkType `json:"type"`
-    Text    string          `json:"text,omitempty"`
-    ToolUse *ToolUse        `json:"tool_use,omitempty"`
-    Partial string          `json:"partial,omitempty"`
-    Usage   *TokenUsage     `json:"usage,omitempty"`
+    Type     StreamChunkType `json:"type"`
+    Text     string          `json:"text,omitempty"`
+    ToolUse  *ToolUse        `json:"tool_use,omitempty"`
+    Thinking *Thinking       `json:"thinking,omitempty"`
+    Partial  string          `json:"partial,omitempty"`
+    Usage    *TokenUsage     `json:"usage,omitempty"`
 }
 ```
 
@@ -681,6 +724,8 @@ type StreamChunk struct {
 | `llm.ChunkText`         | `"text"`          | `Text` |
 | `llm.ChunkToolUseStart` | `"tool_use_start"`| `ToolUse` (`ID`, `Name`) |
 | `llm.ChunkToolUseDelta` | `"tool_use_delta"`| `Partial` (JSON fragment) |
+| `llm.ChunkThinkingStart` | `"thinking_start"` | `Thinking` (`Data` for a redacted block) |
+| `llm.ChunkThinkingDelta` | `"thinking_delta"` | `Thinking` (`Text` or `Signature` fragment) |
 | `llm.ChunkDone`         | `"done"`          | `Usage` (always non-nil) |
 
 ---
