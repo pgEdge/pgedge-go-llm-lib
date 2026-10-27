@@ -837,6 +837,52 @@ func TestResponsesAPI_ToolMessageNonToolResultSkipped(t *testing.T) {
 	}
 }
 
+// TestResponsesAPI_UserToolResultsBecomeFunctionCallOutputs covers
+// tool results sent in a user message, which used to be dropped (#52).
+func TestResponsesAPI_UserToolResultsBecomeFunctionCallOutputs(t *testing.T) {
+	items := buildResponsesInput([]llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			llm.ToolResultBlock("c1", "first", false),
+			llm.TextBlock("Now summarise."),
+			llm.ToolResultBlock("c2", "second", false),
+		},
+	}})
+	got, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"type":"function_call_output","call_id":"c1","output":"first"},` +
+		`{"type":"function_call_output","call_id":"c2","output":"second"},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"Now summarise."}]}]`
+	if string(got) != want {
+		t.Errorf("input =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestResponsesAPI_EmptyToolResultKeepsOutput checks that an empty
+// result still sends the "output" key, which the API requires.
+func TestResponsesAPI_EmptyToolResultKeepsOutput(t *testing.T) {
+	items := convertResponsesToolMessage(llm.ToolResultMessage("c1", "", false))
+	got, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"type":"function_call_output","call_id":"c1","output":""}]`; string(got) != want {
+		t.Errorf("input = %s, want %s", got, want)
+	}
+}
+
+func TestResponsesAPI_UserOnlyToolResultsEmitsNoMessage(t *testing.T) {
+	items := buildResponsesInput([]llm.Message{{
+		Role:    llm.RoleUser,
+		Content: []llm.ContentBlock{llm.ToolResultBlock("c1", "done", false)},
+	}})
+	if len(items) != 1 || items[0].Type != "function_call_output" || items[0].CallID != "c1" {
+		t.Errorf("expected a single function_call_output, got %#v", items)
+	}
+}
+
 func TestResponsesAPI_ToolChoiceModes(t *testing.T) {
 	cases := []struct {
 		name string

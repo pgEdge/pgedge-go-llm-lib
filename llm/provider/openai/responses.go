@@ -52,7 +52,10 @@ type responsesInputItem struct {
 	CallID    string                 `json:"call_id,omitempty"`
 	Name      string                 `json:"name,omitempty"`
 	Arguments string                 `json:"arguments,omitempty"`
-	Output    string                 `json:"output,omitempty"`
+	// Output is a pointer so that a function_call_output item keeps
+	// its required "output" key when the tool result is empty, whilst
+	// message and function_call items still omit it.
+	Output *string `json:"output,omitempty"`
 }
 
 // responsesContentPart is one element of an input message's content
@@ -222,7 +225,8 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 // Responses API "input" array. Assistant tool-use blocks and tool-role
 // messages are emitted as top-level function_call / function_call_output
 // items, not nested under an assistant message — this matches the
-// Responses wire format.
+// Responses wire format. Tool results in a user message are split out
+// the same way (see splitUserToolResults).
 func buildResponsesInput(msgs []llm.Message) []responsesInputItem {
 	var out []responsesInputItem
 	for _, m := range msgs {
@@ -231,6 +235,16 @@ func buildResponsesInput(msgs []llm.Message) []responsesInputItem {
 			out = append(out, convertResponsesAssistantMessage(m)...)
 		case llm.RoleTool:
 			out = append(out, convertResponsesToolMessage(m)...)
+		case llm.RoleUser:
+			results, rest, ok := splitUserToolResults(m)
+			if !ok {
+				out = append(out, convertResponsesUserMessage(m))
+				continue
+			}
+			out = append(out, convertResponsesToolMessage(results)...)
+			if len(rest.Content) > 0 {
+				out = append(out, convertResponsesUserMessage(rest))
+			}
 		default:
 			out = append(out, convertResponsesUserMessage(m))
 		}
@@ -315,10 +329,11 @@ func convertResponsesToolMessage(m llm.Message) []responsesInputItem {
 		if b.Type != llm.BlockToolResult {
 			continue
 		}
+		output := b.Text
 		out = append(out, responsesInputItem{
 			Type:   "function_call_output",
 			CallID: b.ToolUseID,
-			Output: b.Text,
+			Output: &output,
 		})
 	}
 	return out
