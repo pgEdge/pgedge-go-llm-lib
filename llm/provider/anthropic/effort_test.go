@@ -266,21 +266,22 @@ func TestDisabledThinkingRejected(t *testing.T) {
 }
 
 func TestEffortRejectionsChained(t *testing.T) {
-	// Temperature, thinking and effort refused in turn take four sends.
+	// Temperature, thinking, effort and the top-level cache_control
+	// marker refused in turn take five sends, the most one call makes.
 	// The temperature is 1, the only value Anthropic allows alongside
 	// thinking, so it is sent with adaptive thinking.
 	effortModes(t, func(t *testing.T, stream bool) {
-		srv, requests := effortServer(t, temperatureDeprecatedBody, adaptiveRejected, effortRejected)
-		c := newEffortClient(t, srv.URL, llm.Options{Temperature: llm.Float(1)})
+		srv, requests := effortServer(t, temperatureDeprecatedBody, adaptiveRejected, effortRejected, cacheControlRejected)
+		c := newEffortClient(t, srv.URL, llm.Options{Temperature: llm.Float(1), PromptCaching: llm.PromptCachingAuto})
 		if err := sendEffort(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortMax}); err != nil {
 			t.Fatalf("call: %v", err)
 		}
 		got := requests()
-		if len(got) != 4 {
-			t.Fatalf("requests = %d, want 4", len(got))
+		if len(got) != maxSends {
+			t.Fatalf("requests = %d, want %d", len(got), maxSends)
 		}
-		last := got[3]
-		for _, key := range []string{"temperature", "thinking", "output_config"} {
+		last := got[maxSends-1]
+		for _, key := range []string{"temperature", "thinking", "output_config", "cache_control"} {
 			if _, has := last[key]; has {
 				t.Errorf("final request should omit %s: %v", key, last)
 			}

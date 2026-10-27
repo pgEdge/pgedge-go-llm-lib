@@ -63,6 +63,11 @@ const (
 	adjustCaching     = "cache_control"
 )
 
+// adjustCachingThisCall marks, in a call's applied adjustments, a
+// top-level cache_control marker dropped for that call only, because
+// the rejection could be about a block marker; see adaptToRejection.
+const adjustCachingThisCall = adjustCaching + "/this call"
+
 // checkRequest returns an error for a request whose reasoning effort or
 // prompt caching setting, or the client default it falls back to, is
 // not recognised, so that it fails before any network call.
@@ -158,7 +163,11 @@ func (c *client) setReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRequ
 //     omits that level or type from every later request.
 //   - The top-level cache_control marker from PromptCachingAuto, which
 //     some Anthropic-compatible endpoints do not accept: the client
-//     omits it from every later request.
+//     omits it from every later request. When the request also carried
+//     block markers, the rejection could be about one of those, so the
+//     marker is omitted for this call only, and remembered once a
+//     resend without it succeeds (see confirmAdjustments); if that
+//     resend fails the same way, the error stands.
 //
 // Thinking the Extension set ("enabled") is the caller's explicit
 // choice and is never dropped.
@@ -196,11 +205,11 @@ func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRe
 		}
 		return adjustEffort
 
-	// Only a rejection when the request carried no other marker, since
-	// one naming cache_control could otherwise be about a tool or
-	// system marker.
-	case sent.CacheControl != nil && strings.Contains(msg, "cache_control") &&
-		blockMarkers(sent) == 0:
+	case sent.CacheControl != nil && strings.Contains(msg, "cache_control"):
+		if blockMarkers(sent) > 0 {
+			c.logAdjustment(adjustCaching, "omitted for this request")
+			return adjustCachingThisCall
+		}
 		if c.learn(&c.dropAutoCaching) {
 			c.logAdjustment(adjustCaching, "omitted")
 		}
@@ -291,6 +300,27 @@ func (c *client) logAdjustment(param, action string) {
 			"model", c.model,
 			"param", param,
 			"action", action)
+	}
+}
+
+// omitForCall clears from aReq what an earlier rejection in the same
+// call dropped for that call only.
+func omitForCall(aReq *anthropicChatRequest, applied map[string]bool) {
+	if applied[adjustTemperature] {
+		aReq.Temperature = nil
+	}
+	if applied[adjustCachingThisCall] {
+		aReq.CacheControl = nil
+	}
+}
+
+// confirmAdjustments runs once a call's request has been accepted. A
+// top-level cache_control marker dropped for the call alone was the
+// cause of the rejection, since the resend without it succeeded, so
+// it is now omitted from every later request.
+func (c *client) confirmAdjustments(applied map[string]bool) {
+	if applied[adjustCachingThisCall] && c.learn(&c.dropAutoCaching) {
+		c.logAdjustment(adjustCaching, "omitted")
 	}
 }
 

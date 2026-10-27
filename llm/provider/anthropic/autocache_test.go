@@ -125,18 +125,66 @@ func TestPromptCachingRejected(t *testing.T) {
 	})
 }
 
-func TestPromptCachingRejectionWithBlockMarkersNotRetried(t *testing.T) {
+func TestPromptCachingRejectionWithBlockMarkers(t *testing.T) {
 	// With a system marker also on the wire, a rejection naming
-	// cache_control may be about that marker, so it is not retried.
-	srv, requests := effortServer(t, cacheControlRejected)
-	c := newEffortClient(t, srv.URL, llm.Options{PromptCaching: llm.PromptCachingAuto})
-	err := sendEffort(t, c, false, WithSystemCaching(llm.ChatRequest{SystemPrompt: "You are terse."}))
-	if !errors.Is(err, llm.ErrInvalidRequest) {
-		t.Errorf("want ErrInvalidRequest, got %v", err)
+	// cache_control may be about that marker, so the call is resent
+	// once without the top-level marker. A resend that succeeds shows
+	// the top-level marker was the cause, so it is remembered; one that
+	// fails the same way shows the block marker was, so the error
+	// stands and the top-level marker is still sent on the next call.
+	req := WithSystemCaching(llm.ChatRequest{SystemPrompt: "You are terse."})
+	systemMarked := func(body map[string]any) bool {
+		system, _ := body["system"].([]any)
+		if len(system) != 1 {
+			return false
+		}
+		block, _ := system[0].(map[string]any)
+		return block["cache_control"] != nil
 	}
-	if got := requests(); len(got) != 1 {
-		t.Errorf("requests = %d, want 1", len(got))
-	}
+
+	t.Run("resend succeeds", func(t *testing.T) {
+		effortModes(t, func(t *testing.T, stream bool) {
+			srv, requests := effortServer(t, cacheControlRejected)
+			c := newEffortClient(t, srv.URL, llm.Options{PromptCaching: llm.PromptCachingAuto})
+			for i := 0; i < 2; i++ {
+				if err := sendEffort(t, c, stream, req); err != nil {
+					t.Fatalf("call %d: %v", i, err)
+				}
+			}
+			got := requests()
+			if len(got) != 3 {
+				t.Fatalf("requests = %d, want 3", len(got))
+			}
+			if topLevelCacheType(got[0]) != "ephemeral" || got[1]["cache_control"] != nil || got[2]["cache_control"] != nil {
+				t.Errorf("cache_control should be sent, then omitted: %v", got)
+			}
+			for i, body := range got {
+				if !systemMarked(body) {
+					t.Errorf("request %d lost the system marker: %v", i, body)
+				}
+			}
+		})
+	})
+
+	t.Run("resend fails", func(t *testing.T) {
+		effortModes(t, func(t *testing.T, stream bool) {
+			srv, requests := effortServer(t, cacheControlRejected, cacheControlRejected)
+			c := newEffortClient(t, srv.URL, llm.Options{PromptCaching: llm.PromptCachingAuto})
+			if err := sendEffort(t, c, stream, req); !errors.Is(err, llm.ErrInvalidRequest) {
+				t.Errorf("want ErrInvalidRequest, got %v", err)
+			}
+			if err := sendEffort(t, c, stream, req); err != nil {
+				t.Fatalf("second call: %v", err)
+			}
+			got := requests()
+			if len(got) != 3 {
+				t.Fatalf("requests = %d, want 3", len(got))
+			}
+			if topLevelCacheType(got[0]) != "ephemeral" || got[1]["cache_control"] != nil || topLevelCacheType(got[2]) != "ephemeral" {
+				t.Errorf("cache_control should be sent, omitted on the resend, then sent again: %v", got)
+			}
+		})
+	})
 }
 
 func TestPromptCachingLeftOutWhenBreakpointsUsed(t *testing.T) {

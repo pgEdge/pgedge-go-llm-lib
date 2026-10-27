@@ -386,8 +386,8 @@ Anthropic, `Auto` sends the top-level `cache_control: {type:
 "ephemeral"}`, which places a cache breakpoint on the last cacheable
 block and moves it forward as the conversation grows, so an agent
 loop's resent history is read from the cache. Anthropic bills a cache
-write at 1.25 times the input rate and a read at 0.1 times, so one
-reuse of the prefix pays for the write.
+write at 1.25 times the input rate and a read at 0.1 times or less,
+so one reuse of the prefix pays for the write.
 
 The markers from `anthropic.WithToolCaching`, `WithSystemCaching` and
 `ContentBlock.CacheControl` still apply alongside it. The automatic
@@ -395,8 +395,11 @@ marker counts towards Anthropic's limit of four breakpoints per
 request, so it is left out of a request whose blocks already carry
 four. An endpoint that rejects the top-level marker, as some
 Anthropic-compatible ones do, has it dropped and remembered in the
-same way as a rejected temperature, unless the request also carries
-block markers, which the rejection could be about.
+same way as a rejected temperature. When the request also carries
+block markers, which the rejection could be about, the call is resent
+once without the top-level marker, and the drop is remembered only if
+that resend succeeds; if it fails the same way, the error is
+returned.
 
 OpenAI and Gemini cache automatically, so `Auto` changes nothing
 there, and other providers ignore it. An unknown value fails with

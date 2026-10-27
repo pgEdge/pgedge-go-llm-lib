@@ -280,13 +280,10 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	if err := c.checkRequest(req); err != nil {
 		return nil, err
 	}
-	dropTemperature := false // this call only; see adaptToRejection
-	applied := map[string]bool{}
+	applied := map[string]bool{} // see retryAfterRejection
 	for sends := 1; ; sends++ {
 		aReq := c.buildChatRequest(req, false)
-		if dropTemperature {
-			aReq.Temperature = nil
-		}
+		omitForCall(&aReq, applied)
 
 		var aResp anthropicChatResponse
 		status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
@@ -296,11 +293,11 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 		}
 		if status < 200 || status >= 300 {
 			if c.retryAfterRejection(status, body, &aReq, applied, sends) {
-				dropTemperature = dropTemperature || applied[adjustTemperature]
 				continue
 			}
 			return nil, c.mapError(status, body)
 		}
+		c.confirmAdjustments(applied)
 		if err != nil {
 			return nil, c.decodeError(status, err)
 		}
@@ -571,13 +568,10 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 		return nil, err
 	}
 	var resp *http.Response
-	dropTemperature := false // this call only; see adaptToRejection
-	applied := map[string]bool{}
+	applied := map[string]bool{} // see retryAfterRejection
 	for sends := 1; ; sends++ {
 		aReq := c.buildChatRequest(req, true)
-		if dropTemperature {
-			aReq.Temperature = nil
-		}
+		omitForCall(&aReq, applied)
 
 		var err error
 		resp, err = httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
@@ -586,13 +580,13 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 			return nil, err
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			c.confirmAdjustments(applied)
 			break
 		}
 
 		body := httpclient.ReadErrorBody(resp.Body)
 		resp.Body.Close()
 		if c.retryAfterRejection(resp.StatusCode, body, &aReq, applied, sends) {
-			dropTemperature = dropTemperature || applied[adjustTemperature]
 			continue
 		}
 		return nil, c.mapError(resp.StatusCode, body)
