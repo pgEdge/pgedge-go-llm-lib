@@ -20,6 +20,7 @@ project adheres to
 - **Behaviour change:** the OpenAI provider no longer drops `tool_result` blocks sent in a `RoleUser` message, the Anthropic convention, which made OpenAI reject the next turn with a 400 because the earlier tool calls had no matching results ([#52](https://github.com/pgEdge/pgedge-go-llm-lib/issues/52)). Each such block is now sent as a `role: "tool"` message on Chat Completions, or a `function_call_output` item on the Responses API, in the original order, followed by a user message holding the rest of that message's content, if any
 - The OpenAI provider now sends the `output` key on a Responses API `function_call_output` item when the tool result is empty, rather than omitting it, since the API requires it
 - A successful response whose body could not be read in full, for example because the connection dropped part way through, is now reported as an error; the OpenAI, Anthropic, Gemini and Ollama providers previously returned an empty response with no error. Error responses outside the streaming paths are now read up to 64 KiB
+- A successful response whose body is not valid JSON, such as a truncated reply or an HTML page served with a 200, is now reported as `ErrProviderError` ("response could not be decoded") by the OpenAI, Anthropic, Gemini and Ollama providers, rather than returned as an empty chat response, embedding or model list with no error ([#50](https://github.com/pgEdge/pgedge-go-llm-lib/issues/50)). The OpenAI `Decide` error now includes the decoding error as well
 
 ## [0.5.0] - 2026-10-14
 
