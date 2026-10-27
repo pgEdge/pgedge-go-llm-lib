@@ -57,3 +57,30 @@ func TestEmbedMalformedSuccessIsAnError(t *testing.T) {
 		t.Fatalf("err = %v, want ErrProviderError", err)
 	}
 }
+
+func TestResponsesChatMalformedSuccessIsAnError(t *testing.T) {
+	c, err := New(llm.Options{
+		APIKey:     "test-key",
+		Model:      "gpt-5",
+		Extensions: forceResponses,
+		BaseURL:    malformedServer(t),
+		Retry:      llm.RetryConfig{Disabled: true},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	resp, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{llm.UserText("hi")},
+	})
+	if !errors.Is(err, llm.ErrProviderError) || !strings.Contains(err.Error(), "could not be decoded") {
+		t.Fatalf("resp, err = %+v, %v; want a decode error, not an empty reply", resp, err)
+	}
+}
+
+func TestEmbedBatchMalformedSuccessIsAnError(t *testing.T) {
+	c := newTestClient(t, malformedServer(t))
+	vecs, err := c.EmbedBatch(context.Background(), []string{"a", "b"})
+	if !errors.Is(err, llm.ErrProviderError) || !strings.Contains(err.Error(), "could not be decoded") {
+		t.Fatalf("vecs, err = %v, %v; want a decode error, not empty vectors", vecs, err)
+	}
+}
