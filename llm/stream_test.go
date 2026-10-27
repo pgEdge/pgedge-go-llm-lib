@@ -467,6 +467,37 @@ func TestStreamCollectAssemblesThinkingBlocks(t *testing.T) {
 	}
 }
 
+func TestStreamCollectKeepsThinkingAheadOfText(t *testing.T) {
+	// A text chunk closes the thinking block before it, so the block
+	// stays ahead of the answer it led to.
+	src := []StreamChunk{
+		{Type: ChunkThinkingStart, Thinking: &Thinking{}},
+		{Type: ChunkThinkingDelta, Thinking: &Thinking{Text: "Hmm."}},
+		{Type: ChunkThinkingDelta, Thinking: &Thinking{Signature: "sig-A"}},
+		{Type: ChunkText, Text: "Answer."},
+		{Type: ChunkDone},
+	}
+	chunks := make(chan StreamChunk, len(src))
+	errCh := make(chan error, 1)
+	for _, c := range src {
+		chunks <- c
+	}
+	close(chunks)
+	close(errCh)
+
+	resp, err := (&Stream{Chunks: chunks, Err: errCh}).Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	want := []ContentBlock{
+		{Type: BlockThinking, Thinking: &Thinking{Text: "Hmm.", Signature: "sig-A"}},
+		{Type: BlockText, Text: "Answer."},
+	}
+	if !reflect.DeepEqual(resp.Content, want) {
+		t.Errorf("Content = %s, want %s", mustJSON(t, resp.Content), mustJSON(t, want))
+	}
+}
+
 func TestStreamCollectAssemblesThinkingBlocksOnError(t *testing.T) {
 	// The drain loop that runs after an error assembles the same
 	// blocks as the main loop.
