@@ -42,9 +42,11 @@ type Extension struct {
 	// /v1/responses, for fields the library does not model (such as a
 	// gateway's own options). Each value is encoded with encoding/json
 	// and set as a top-level field after the library builds the body,
-	// so a key the library also sets is replaced by the extra value. An
-	// error that names one of these fields is returned to the caller
-	// without the client adjusting and resending the request.
+	// so a key the library also sets is replaced by the extra value. A
+	// "stream" field fails with llm.ErrInvalidRequest, since Chat and
+	// ChatStream choose streaming. An error that names one of these
+	// fields is returned to the caller without the client adjusting and
+	// resending the request.
 	//
 	// It is read from a request's Extensions and from
 	// llm.Options.Extensions; the request's map is merged over the

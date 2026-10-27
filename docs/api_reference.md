@@ -432,8 +432,10 @@ on `Options.Extensions` is merged over it, and one on the request is
 merged over both, key by key. Each value is encoded with
 `encoding/json`, and a value that cannot be encoded fails with
 `ErrInvalidRequest` before sending. A `nil` value is sent as JSON
-`null` rather than removing the field. Other providers ignore
-`ExtraBody`.
+`null` rather than removing the field. A `stream` field also fails
+with `ErrInvalidRequest` before sending, since `Chat` and `ChatStream`
+choose streaming and a field that disagreed would have the response
+read in the wrong format. Other providers ignore `ExtraBody`.
 
 The fields are set at the top level after the library builds the
 body, so a key the library also sets is replaced whole by the extra
@@ -447,8 +449,8 @@ setting a field that only one endpoint accepts. The route is read only
 from `Options.Extensions`, so put `openai.Extension{ResponsesAPI: ...}`
 there; `ResponsesAPI` on a request's extension has no effect.
 
-An error whose `param`, or whose message when `param` is empty, names
-an extra field is returned to the caller without the client adjusting
+An error whose `param` names an extra field, or whose message names
+one in single quotes when `param` is empty, is returned to the caller without the client adjusting
 and resending the request, because the caller asked for that field.
 That includes a library field the extra value replaced, so a
 `reasoning_effort` set through `ExtraBody` is never dropped by the

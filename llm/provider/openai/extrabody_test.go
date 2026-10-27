@@ -128,6 +128,44 @@ func TestExtraBodyUnencodableRejectedBeforeSending(t *testing.T) {
 	})
 }
 
+func TestExtraBodyStreamRejectedBeforeSending(t *testing.T) {
+	// Chat and ChatStream choose streaming, so a stream field in either
+	// direction is refused rather than having the response read in the
+	// wrong format.
+	for _, v := range []bool{true, false} {
+		modes(t, func(t *testing.T, stream bool) {
+			srv, requests := adaptServer(t)
+			c := newExtraBodyClient(t, srv.URL, false, nil, map[string]any{"stream": v})
+
+			_, err := call(t, c, stream, llm.ChatRequest{})
+			var pe *llm.ProviderError
+			if !errors.As(err, &pe) || !errors.Is(err, llm.ErrInvalidRequest) || pe.Provider != "openai" {
+				t.Errorf("stream %v: want an openai ErrInvalidRequest, got %v", v, err)
+			}
+			if got := requests(); len(got) != 0 {
+				t.Errorf("stream %v: requests = %d, want 0", v, len(got))
+			}
+		})
+	}
+}
+
+func TestExtraBodyModelStillAdjusts(t *testing.T) {
+	// A message that only uses the word "model" does not name an extra
+	// model field, so the rejected reasoning effort is still dropped.
+	modes(t, func(t *testing.T, stream bool) {
+		srv, requests := adaptServer(t, scriptedReply{400, effortParamRejected})
+		c := newExtraBodyClient(t, srv.URL, false, map[string]any{"model": "gateway/gpt"}, nil)
+
+		if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortLow}); err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		got := requests()
+		if len(got) != 2 || got[1].has("reasoning_effort") || got[1].body["model"] != "gateway/gpt" {
+			t.Errorf("want a resend without reasoning_effort and with the extra model: %d requests, %v", len(got), got[len(got)-1].body)
+		}
+	})
+}
+
 func TestExtraBodyRejectionNotRetried(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -194,7 +232,8 @@ func TestNamesExtraField(t *testing.T) {
 		{`{"error":{"param":"metadata_extra"}}`, false},
 		{`{"error":{"param":"temperature","message":"metadata"}}`, false},
 		{`{"error":{"param":null,"message":"Unknown parameter: 'metadata.tenant'."}}`, true},
-		{`{"error":{"param":null,"message":"metadata is not supported"}}`, true},
+		{`{"error":{"param":null,"message":"metadata is not supported"}}`, false},
+		{`{"error":{"param":null,"message":"Unknown parameter: 'metadata[0]'."}}`, true},
 		{`{"error":{"param":null,"message":"Unknown parameter: 'user_metadata'."}}`, false},
 		{`{"error":{"param":null,"message":"Unknown parameter: 'metadata2'."}}`, false},
 		{`{"error":{"param":null,"message":"Unknown parameter: 'request.metadata'."}}`, false},

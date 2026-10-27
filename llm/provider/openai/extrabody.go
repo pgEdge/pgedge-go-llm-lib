@@ -41,9 +41,19 @@ func (c *client) extraBody(req llm.ChatRequest) map[string]any {
 	return out
 }
 
-// checkExtraBody reports an extra field whose value cannot be encoded
-// as JSON, before anything is sent.
+// checkExtraBody reports, before anything is sent, an extra stream
+// field or one whose value cannot be encoded as JSON. Chat and
+// ChatStream decide streaming themselves, and a stream field that
+// disagreed would have the response read in the wrong format and
+// returned empty with no error.
 func checkExtraBody(extra map[string]any) error {
+	if _, ok := extra["stream"]; ok {
+		return &llm.ProviderError{
+			Err:      llm.ErrInvalidRequest,
+			Message:  `extra body field "stream" is not allowed: use Chat or ChatStream to choose streaming`,
+			Provider: providerName,
+		}
+	}
 	for k, v := range extra {
 		if _, err := json.Marshal(v); err != nil {
 			return &llm.ProviderError{
@@ -83,8 +93,11 @@ func withExtraBody(body any, extra map[string]any) (any, error) {
 
 // namesExtraField reports whether a rejection names one of the extra
 // fields the request carried, either in the error's param (the field
-// itself or a path inside it) or, when param is empty, in the message,
-// which is where OpenAI names the field on some errors.
+// itself or a path inside it) or, when param is empty, quoted in the
+// message, which is where OpenAI names the field on some errors
+// ("Unsupported parameter: 'reasoning_effort' ..."). Only a quoted name
+// counts, so that an extra field such as "model" is not taken to be
+// named by a message that merely uses the word.
 func namesExtraField(body []byte, extra map[string]any) bool {
 	if len(extra) == 0 {
 		return false
@@ -94,7 +107,7 @@ func namesExtraField(body []byte, extra map[string]any) bool {
 	param, msg := errResp.Error.Param, errResp.Error.Message
 	for k := range extra {
 		if param == "" {
-			if mentionsField(msg, k) {
+			if quotesField(msg, k) {
 				return true
 			}
 			continue
@@ -106,38 +119,16 @@ func namesExtraField(body []byte, extra map[string]any) bool {
 	return false
 }
 
-// mentionsField reports whether msg names field as a whole field name,
-// or as the start of a path inside it, rather than as part of another
-// name: "effort" is not named by "reasoning_effort" or
-// "reasoning.effort".
-func mentionsField(msg, field string) bool {
+// quotesField reports whether msg names field, or a path inside it,
+// in single quotes: 'field', 'field.sub' or 'field[0]'.
+func quotesField(msg, field string) bool {
 	if field == "" {
 		return false
 	}
-	for i := 0; ; {
-		j := strings.Index(msg[i:], field)
-		if j < 0 {
-			return false
-		}
-		start, end := i+j, i+j+len(field)
-		if (start == 0 || !partOfName(msg[start-1], true)) &&
-			(end == len(msg) || !partOfName(msg[end], false)) {
+	for _, end := range []string{"'", ".", "["} {
+		if strings.Contains(msg, "'"+field+end) {
 			return true
 		}
-		i = start + 1
-	}
-}
-
-// partOfName reports whether c, next to a field name in a message,
-// makes it part of a longer name. A dot before the name makes it a
-// path inside another field; a dot after it is a path inside it, or
-// the end of a sentence.
-func partOfName(c byte, before bool) bool {
-	switch {
-	case c == '_', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		return true
-	case c == '.':
-		return before
 	}
 	return false
 }
