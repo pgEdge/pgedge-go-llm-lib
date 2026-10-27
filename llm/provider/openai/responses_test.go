@@ -837,6 +837,44 @@ func TestResponsesAPI_ToolMessageNonToolResultSkipped(t *testing.T) {
 	}
 }
 
+// TestResponsesAPI_UserToolResultsBecomeFunctionCallOutputs covers
+// tool results sent in a user message, which used to be dropped (#52).
+func TestResponsesAPI_UserToolResultsBecomeFunctionCallOutputs(t *testing.T) {
+	items := buildResponsesInput([]llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			llm.ToolResultBlock("c1", "first", false),
+			llm.TextBlock("Now summarise."),
+			llm.ToolResultBlock("c2", "second", false),
+		},
+	}})
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d: %#v", len(items), items)
+	}
+	for i, id := range []string{"c1", "c2"} {
+		if items[i].Type != "function_call_output" || items[i].CallID != id {
+			t.Errorf("[%d] = %#v, want function_call_output %q", i, items[i], id)
+		}
+	}
+	if items[1].Output != "second" {
+		t.Errorf("[1] output = %q, want second", items[1].Output)
+	}
+	if items[2].Type != "message" || items[2].Role != "user" ||
+		len(items[2].Content) != 1 || items[2].Content[0].Text != "Now summarise." {
+		t.Errorf("[2] = %#v, want the remaining user text", items[2])
+	}
+}
+
+func TestResponsesAPI_UserOnlyToolResultsEmitsNoMessage(t *testing.T) {
+	items := buildResponsesInput([]llm.Message{{
+		Role:    llm.RoleUser,
+		Content: []llm.ContentBlock{llm.ToolResultBlock("c1", "done", false)},
+	}})
+	if len(items) != 1 || items[0].Type != "function_call_output" || items[0].CallID != "c1" {
+		t.Errorf("expected a single function_call_output, got %#v", items)
+	}
+}
+
 func TestResponsesAPI_ToolChoiceModes(t *testing.T) {
 	cases := []struct {
 		name string

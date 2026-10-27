@@ -1325,6 +1325,68 @@ func TestConvertMessage_RoleDispatch(t *testing.T) {
 	}
 }
 
+// TestConvertMessage_UserToolResultsBecomeToolMessages covers tool
+// results sent in a user message, the Anthropic convention, which
+// used to be dropped (#52).
+func TestConvertMessage_UserToolResultsBecomeToolMessages(t *testing.T) {
+	msgs := convertMessage(llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			llm.ToolResultBlock("call_1", "first", false),
+			llm.TextBlock("Now summarise."),
+			llm.ToolResultBlock("call_2", "second", true),
+		},
+	})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 OpenAI messages, got %d: %#v", len(msgs), msgs)
+	}
+	for i, id := range []string{"call_1", "call_2"} {
+		if msgs[i].Role != "tool" || msgs[i].ToolCallID != id {
+			t.Errorf("[%d] = role %q id %q, want tool %q", i, msgs[i].Role, msgs[i].ToolCallID, id)
+		}
+	}
+	if c, _ := msgs[1].Content.(string); c != "second" {
+		t.Errorf("[1] content = %v, want second", msgs[1].Content)
+	}
+	if msgs[2].Role != "user" {
+		t.Errorf("[2] role = %q, want user", msgs[2].Role)
+	}
+	if c, _ := msgs[2].Content.(string); c != "Now summarise." {
+		t.Errorf("[2] content = %v, want the remaining text", msgs[2].Content)
+	}
+}
+
+func TestConvertMessage_UserOnlyToolResultsEmitsNoUserMessage(t *testing.T) {
+	msgs := convertMessage(llm.Message{
+		Role:    llm.RoleUser,
+		Content: []llm.ContentBlock{llm.ToolResultBlock("call_1", "done", false)},
+	})
+	if len(msgs) != 1 || msgs[0].Role != "tool" || msgs[0].ToolCallID != "call_1" {
+		t.Errorf("expected a single tool message, got %#v", msgs)
+	}
+}
+
+func TestConvertMessages_UserToolResultsFollowToolCalls(t *testing.T) {
+	c := &client{}
+	msgs := c.convertMessages(llm.ChatRequest{
+		Messages: []llm.Message{
+			llm.UserText("What is the weather?"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{
+				Type:    llm.BlockToolUse,
+				ToolUse: &llm.ToolUse{ID: "call_1", Name: "weather", Input: []byte(`{}`)},
+			}}},
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.ToolResultBlock("call_1", "Sunny", false)}},
+		},
+	})
+	roles := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+	if got := strings.Join(roles, ","); got != "user,assistant,tool" {
+		t.Errorf("roles = %s, want user,assistant,tool", got)
+	}
+}
+
 // ---------- normalizeStopReason ----------
 
 func TestNormalizeStopReason_Length(t *testing.T) {

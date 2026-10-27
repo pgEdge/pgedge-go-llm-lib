@@ -417,10 +417,46 @@ func convertMessage(m llm.Message) []openaiMessage {
 		return []openaiMessage{convertAssistantMessage(m)}
 	case llm.RoleTool:
 		return convertToolMessage(m)
+	case llm.RoleUser:
+		results, rest, ok := splitUserToolResults(m)
+		if !ok {
+			return []openaiMessage{convertUserMessage(m)}
+		}
+		out := convertToolMessage(results)
+		if len(rest.Content) > 0 {
+			out = append(out, convertUserMessage(rest))
+		}
+		return out
 	default:
-		// user, system
+		// system
 		return []openaiMessage{convertUserMessage(m)}
 	}
+}
+
+// splitUserToolResults separates the BlockToolResult blocks of a user
+// message, which is how Anthropic carries tool results, from the rest
+// of its content. OpenAI only accepts tool results as role:"tool"
+// messages (or function_call_output items), so without this split the
+// results were dropped and the API rejected the next turn because the
+// earlier tool calls had no matching results.
+//
+// The tool results keep their relative order and are emitted before
+// the remaining content: OpenAI requires them to follow the assistant
+// message that made the calls directly, and Anthropic likewise
+// requires tool_result blocks to lead a user message, so this keeps
+// the conversation's meaning. ok is false when the message holds no
+// tool results, in which case it should be converted unchanged.
+func splitUserToolResults(m llm.Message) (results, rest llm.Message, ok bool) {
+	results = llm.Message{Role: llm.RoleTool}
+	rest = llm.Message{Role: m.Role}
+	for _, b := range m.Content {
+		if b.Type == llm.BlockToolResult {
+			results.Content = append(results.Content, b)
+		} else {
+			rest.Content = append(rest.Content, b)
+		}
+	}
+	return results, rest, len(results.Content) > 0
 }
 
 // convertUserMessage emits a user/system message. Text-only content

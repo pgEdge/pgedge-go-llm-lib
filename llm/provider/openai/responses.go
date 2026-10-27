@@ -222,7 +222,8 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 // Responses API "input" array. Assistant tool-use blocks and tool-role
 // messages are emitted as top-level function_call / function_call_output
 // items, not nested under an assistant message — this matches the
-// Responses wire format.
+// Responses wire format. Tool results in a user message are split out
+// the same way (see splitUserToolResults).
 func buildResponsesInput(msgs []llm.Message) []responsesInputItem {
 	var out []responsesInputItem
 	for _, m := range msgs {
@@ -231,6 +232,16 @@ func buildResponsesInput(msgs []llm.Message) []responsesInputItem {
 			out = append(out, convertResponsesAssistantMessage(m)...)
 		case llm.RoleTool:
 			out = append(out, convertResponsesToolMessage(m)...)
+		case llm.RoleUser:
+			results, rest, ok := splitUserToolResults(m)
+			if !ok {
+				out = append(out, convertResponsesUserMessage(m))
+				continue
+			}
+			out = append(out, convertResponsesToolMessage(results)...)
+			if len(rest.Content) > 0 {
+				out = append(out, convertResponsesUserMessage(rest))
+			}
 		default:
 			out = append(out, convertResponsesUserMessage(m))
 		}

@@ -127,6 +127,12 @@ messages = append(messages, llm.Message{
 })
 ```
 
+Tool results may also be sent in a user-role message, which
+is the Anthropic convention. The OpenAI provider converts
+each one to OpenAI's own tool-result form, in the original
+order, followed by a user message holding any other content
+from that message.
+
 ## Tool Call Loop
 
 A common pattern is to loop until the model stops requesting
