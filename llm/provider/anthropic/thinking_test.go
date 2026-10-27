@@ -236,3 +236,26 @@ func TestSignatureRejectionWithoutBlocksNotRetried(t *testing.T) {
 		t.Errorf("requests = %d, want 1", len(got))
 	}
 }
+
+func TestStripThinkingBlocksDropsEmptiedMessages(t *testing.T) {
+	// A turn that stopped whilst thinking holds nothing else, so it
+	// goes rather than being sent with empty content; a message that
+	// was already empty is left alone.
+	text := func(s string) anthropicContentBlock { return anthropicContentBlock{Type: "text", Text: s} }
+	aReq := &anthropicChatRequest{Messages: []anthropicMessage{
+		{Role: "user", Content: []anthropicContentBlock{text("one")}},
+		{Role: "assistant", Content: []anthropicContentBlock{
+			{Type: "redacted_thinking", Data: "opaque-data"},
+		}},
+		{Role: "user", Content: []anthropicContentBlock{text("two")}},
+		{Role: "assistant", Content: []anthropicContentBlock{}},
+	}}
+	stripThinkingBlocks(aReq)
+	roles := make([]string, 0, len(aReq.Messages))
+	for _, m := range aReq.Messages {
+		roles = append(roles, m.Role)
+	}
+	if want := []string{"user", "user", "assistant"}; !reflect.DeepEqual(roles, want) {
+		t.Errorf("roles = %v, want %v", roles, want)
+	}
+}

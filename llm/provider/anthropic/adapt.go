@@ -270,17 +270,25 @@ func isThinkingBlock(b anthropicContentBlock) bool {
 
 // stripThinkingBlocks removes every thinking and redacted-thinking
 // block from aReq's messages, leaving each message's other blocks in
-// place.
+// place. A message that held nothing but thinking blocks is dropped
+// rather than sent with empty content; the Messages API combines the
+// consecutive same-role turns this can leave behind into one turn.
 func stripThinkingBlocks(aReq *anthropicChatRequest) {
-	for i, m := range aReq.Messages {
+	msgs := make([]anthropicMessage, 0, len(aReq.Messages))
+	for _, m := range aReq.Messages {
 		kept := make([]anthropicContentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
 			if !isThinkingBlock(b) {
 				kept = append(kept, b)
 			}
 		}
-		aReq.Messages[i].Content = kept
+		if len(kept) == 0 && len(m.Content) > 0 {
+			continue
+		}
+		m.Content = kept
+		msgs = append(msgs, m)
 	}
+	aReq.Messages = msgs
 }
 
 // temperatureRejectedForThinking reports whether a temperature
