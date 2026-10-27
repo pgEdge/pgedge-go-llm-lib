@@ -350,15 +350,21 @@ func (c *client) logAdjustment(param, action string) {
 
 // sendWithAdjustments calls send, routed as the client currently
 // decides, and retries after each rejection that an adjustment can
-// resolve. Each adjustment is applied at most once per call (a
-// rejected reasoning effort level counts separately for each level, so
-// a call can step through neighbouring levels), and at most maxSends
-// requests are made. send returns a rejection for a non-2xx response
-// and an error for anything else that failed; omitEffort tells it to
-// leave reasoning effort out of this call's requests.
+// resolve. Each adjustment is applied at most once per call, and at
+// most maxSends requests are made. send returns a rejection for a
+// non-2xx response and an error for anything else that failed;
+// omitEffort tells it to leave reasoning effort out of this call's
+// requests.
+//
+// A rejected reasoning effort level is replaced by its neighbour
+// towards medium once per call. If the neighbour is rejected as well,
+// the rest of the call omits the effort, so that a model accepting
+// only one level (GPT-5 Pro takes only "high") still gets a request it
+// accepts within maxSends; every rejected level is still remembered,
+// so later calls start nearer a level the model accepts.
 func sendWithAdjustments[T any](c *client, send func(responses, omitEffort bool) (T, *rejection, error)) (T, error) {
 	applied := map[string]bool{}
-	omitEffort := false
+	omitEffort, stepped := false, false
 	for sends := 1; ; sends++ {
 		out, rej, err := send(c.useResponsesAPI(), omitEffort)
 		if rej == nil {
@@ -371,6 +377,10 @@ func sendWithAdjustments[T any](c *client, send func(responses, omitEffort bool)
 			return zero, c.mapError(rej.status, rej.body)
 		}
 		applied[key] = true
+		if param == adjustEffort && action != actionEffortAll && action != actionEffortThisCall {
+			omitEffort = omitEffort || stepped
+			stepped = true
+		}
 		if action == actionEffortThisCall {
 			omitEffort = true
 			c.logAdjustment(param, action)

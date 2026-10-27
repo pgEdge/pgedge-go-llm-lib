@@ -252,7 +252,8 @@ type ChatRequest struct {
 //   - Providers without an effort control leave it out.
 //
 // Which levels a model accepts varies by model. When a model rejects a
-// level, the provider retries the request without it and remembers the
+// level, the provider retries the request without it (OpenAI first
+// tries the neighbouring level towards medium) and remembers the
 // rejection for the rest of the client's life, as it does for other
 // rejected parameters; see Options.Logger. Providers that honour the
 // setting return an error wrapping ErrInvalidRequest, before sending,

@@ -687,17 +687,19 @@ func effortLevelRejected(level string) string {
 }
 
 func TestAdapt_ReasoningEffortStepsTowardsMedium(t *testing.T) {
-	// Successive rejections step a low level up and a high level down,
-	// one level per send, and a rejected medium is omitted.
+	// A rejection steps a low level up or a high level down, once per
+	// call; a second rejection in the same call, or a rejected medium,
+	// omits the effort for the rest of the call. The next call starts
+	// from the nearest level not yet rejected.
 	for _, tc := range []struct {
 		name    string
 		start   llm.ReasoningEffort
 		replies []string
 		want    []any // reasoning_effort per request, nil for omitted
 	}{
-		{"up", llm.ReasoningEffortNone, []string{"none", "minimal"}, []any{"none", "minimal", "low"}},
-		{"down", llm.ReasoningEffortMax, []string{"max"}, []any{"max", "xhigh"}},
-		{"medium", llm.ReasoningEffortMedium, []string{"medium"}, []any{"medium", nil}},
+		{"up", llm.ReasoningEffortNone, []string{"none", "minimal"}, []any{"none", "minimal", nil, "low"}},
+		{"down", llm.ReasoningEffortMax, []string{"max"}, []any{"max", "xhigh", "xhigh"}},
+		{"medium", llm.ReasoningEffortMedium, []string{"medium"}, []any{"medium", nil, nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			modes(t, func(t *testing.T, stream bool) {
@@ -707,8 +709,10 @@ func TestAdapt_ReasoningEffortStepsTowardsMedium(t *testing.T) {
 				}
 				srv, requests := adaptServer(t, replies...)
 				c := newAdaptClient(t, srv.URL, nil)
-				if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: tc.start}); err != nil {
-					t.Fatalf("call: %v", err)
+				for i := 0; i < 2; i++ {
+					if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: tc.start}); err != nil {
+						t.Fatalf("call %d: %v", i, err)
+					}
 				}
 				got := requests()
 				if len(got) != len(tc.want) {

@@ -337,8 +337,10 @@ type ChatRequest struct {
 with one of `llm.ReasoningEffortNone`, `Minimal`, `Low`, `Medium`,
 `High`, `XHigh` or `Max`. Leaving it unset on both `ChatRequest` and
 `Options` leaves the field out of the request, so the model's own
-default applies. An unknown value fails with `ErrInvalidRequest`
-before any request is sent. Each provider translates the level:
+default applies. On the providers that send the setting (OpenAI,
+Anthropic and Gemini), an unknown value fails with
+`ErrInvalidRequest` before any request is sent; the others ignore
+it. Each provider translates the level:
 
 | Provider  | Sent as |
 |-----------|---------|
@@ -357,9 +359,12 @@ thinking still gets the effort. On OpenAI, a rejected level is
 replaced by the nearest level towards `medium` that the model has
 not rejected (so `none` becomes `minimal`, and `max` becomes
 `xhigh`), since omitting it would apply the model's default, which
-is usually further from the level asked for; a rejected `medium` is
-omitted, and a model that rejects the parameter itself, rather than
-one level, has it omitted at every level. An OpenAI rejection that
+is usually further from the level asked for. A call steps only
+once: if the replacement is rejected too, or the rejected level is
+`medium`, the rest of the call omits the effort, whilst later calls
+start from the nearest level not yet rejected. A model that rejects
+the parameter itself, rather than one level, has it omitted at
+every level. An OpenAI rejection that
 names the effort only in its message, of a request that carried
 tools, may be about tools and effort together, so the effort is
 omitted for that call only.
