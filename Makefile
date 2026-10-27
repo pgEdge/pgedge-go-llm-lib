@@ -15,7 +15,7 @@ GO ?= go
 # Must stay on the v2 module path: .golangci.yml is `version: "2"` format,
 # which the v1 binary cannot read. CI installs this same pin.
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null)
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 
 PKGS := ./...
 
