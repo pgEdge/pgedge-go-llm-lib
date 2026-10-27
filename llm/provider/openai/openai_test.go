@@ -1345,8 +1345,8 @@ func TestConvertMessage_UserToolResultsBecomeToolMessages(t *testing.T) {
 			t.Errorf("[%d] = role %q id %q, want tool %q", i, msgs[i].Role, msgs[i].ToolCallID, id)
 		}
 	}
-	if c, _ := msgs[1].Content.(string); c != "second" {
-		t.Errorf("[1] content = %v, want second", msgs[1].Content)
+	if c, _ := msgs[1].Content.(string); c != `{"error":"second"}` {
+		t.Errorf(`[1] content = %v, want {"error":"second"}`, msgs[1].Content)
 	}
 	if msgs[2].Role != "user" {
 		t.Errorf("[2] role = %q, want user", msgs[2].Role)

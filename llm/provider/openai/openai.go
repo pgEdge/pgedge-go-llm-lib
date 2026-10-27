@@ -22,6 +22,7 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/toolresult"
 )
 
 const (
@@ -581,7 +582,9 @@ func convertAssistantMessage(m llm.Message) openaiMessage {
 }
 
 // convertToolMessage emits one role:"tool" OpenAI message per
-// BlockToolResult in the input message.
+// BlockToolResult in the input message. The tool message has no field
+// marking a failure, so a result with IsError set is sent as
+// {"error": "<text>"} (see toolresult.Content).
 func convertToolMessage(m llm.Message) []openaiMessage {
 	out := make([]openaiMessage, 0, len(m.Content))
 	for _, b := range m.Content {
@@ -590,7 +593,7 @@ func convertToolMessage(m llm.Message) []openaiMessage {
 		}
 		out = append(out, openaiMessage{
 			Role:       "tool",
-			Content:    b.Text,
+			Content:    toolresult.Content(b.Text, b.IsError),
 			ToolCallID: b.ToolUseID,
 		})
 	}

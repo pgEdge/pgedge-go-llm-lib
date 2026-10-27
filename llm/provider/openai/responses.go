@@ -19,6 +19,7 @@ import (
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/toolresult"
 )
 
 // ---------- Wire types: request ----------
@@ -337,13 +338,17 @@ func convertResponsesAssistantMessage(m llm.Message) []responsesInputItem {
 	return items
 }
 
+// convertResponsesToolMessage emits one function_call_output item per
+// BlockToolResult. The item has no field marking a failure (its status
+// only tracks progress), so a result with IsError set is sent as
+// {"error": "<text>"} (see toolresult.Content).
 func convertResponsesToolMessage(m llm.Message) []responsesInputItem {
 	out := make([]responsesInputItem, 0, len(m.Content))
 	for _, b := range m.Content {
 		if b.Type != llm.BlockToolResult {
 			continue
 		}
-		output := b.Text
+		output := toolresult.Content(b.Text, b.IsError)
 		out = append(out, responsesInputItem{
 			Type:   "function_call_output",
 			CallID: b.ToolUseID,
