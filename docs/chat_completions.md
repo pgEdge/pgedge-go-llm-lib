@@ -180,6 +180,15 @@ and omit the temperature from every later request made by the
 same client. Set `Options.Logger` to record these adjustments
 at the Debug level.
 
+OpenAI's reasoning models accept a temperature at reasoning
+effort `none` and refuse it at every other level, so the OpenAI
+provider remembers a rejection only alongside the kind of effort
+the rejected request carried: no effort, `none`, or any higher
+level. Anthropic does not allow a temperature other than 1
+alongside thinking, so a request that carries adaptive thinking
+from `ReasoningEffort` leaves any other temperature out rather
+than sending it to be rejected.
+
 ## Response Format (JSON Mode)
 
 The `ResponseFormat` field constrains the model's output

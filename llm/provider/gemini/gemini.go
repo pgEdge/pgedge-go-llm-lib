@@ -44,6 +44,10 @@ type client struct {
 
 	mu              sync.Mutex
 	cumulativeUsage llm.TokenUsage
+
+	// rejectedThinking holds the thinking levels the model has refused
+	// (learned; see adapt.go), which are then omitted.
+	rejectedThinking map[string]bool
 }
 
 // New creates a new Gemini client.
@@ -275,29 +279,34 @@ type geminiModelData struct {
 // ---------- Chat ----------
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	gReq, err := c.buildChatRequest(req)
-	if err != nil {
-		return nil, err
-	}
-
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", c.baseURL, c.model)
 
-	var gResp geminiResponse
-	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
-		url, c.headers(), gReq, &gResp)
-	if err != nil && status == 0 {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, c.mapError(status, body)
-	}
-	if err != nil {
-		return nil, c.decodeError(status, err)
-	}
+	for retried := false; ; retried = true {
+		gReq, err := c.buildChatRequest(req)
+		if err != nil {
+			return nil, err
+		}
 
-	resp := c.parseChatResponse(&gResp)
-	c.addUsage(resp.Usage)
-	return resp, nil
+		var gResp geminiResponse
+		status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
+			url, c.headers(), gReq, &gResp)
+		if err != nil && status == 0 {
+			return nil, err
+		}
+		if status < 200 || status >= 300 {
+			if !retried && c.adaptToRejection(status, body, gReq) {
+				continue
+			}
+			return nil, c.mapError(status, body)
+		}
+		if err != nil {
+			return nil, c.decodeError(status, err)
+		}
+
+		resp := c.parseChatResponse(&gResp)
+		c.addUsage(resp.Usage)
+		return resp, nil
+	}
 }
 
 func (c *client) buildChatRequest(req llm.ChatRequest) (geminiRequest, error) {
@@ -352,7 +361,7 @@ func (c *client) buildChatRequest(req llm.ChatRequest) (geminiRequest, error) {
 		case llm.ResponseFormatJSONSchema:
 			genConfig["responseMimeType"] = "application/json"
 			var schema map[string]any
-			if err := json.Unmarshal(req.ResponseFormat.JSONSchema, &schema); err == nil {
+			if json.Unmarshal(req.ResponseFormat.JSONSchema, &schema) == nil {
 				genConfig["responseSchema"] = schema
 			}
 		}
@@ -361,6 +370,17 @@ func (c *client) buildChatRequest(req llm.ChatRequest) (geminiRequest, error) {
 	// StopSequences: passed via generationConfig.stopSequences.
 	if len(req.StopSequences) > 0 {
 		genConfig["stopSequences"] = req.StopSequences
+	}
+
+	// Reasoning effort: per-request → client default → omit, sent as
+	// thinkingConfig.thinkingLevel and omitted once the model has
+	// rejected the level.
+	level, err := c.thinkingLevel(req)
+	if err != nil {
+		return geminiRequest{}, err
+	}
+	if level != "" {
+		genConfig["thinkingConfig"] = map[string]any{"thinkingLevel": level}
 	}
 
 	if len(genConfig) > 0 {
@@ -710,25 +730,31 @@ func normalizeStopReason(reason string) llm.StopReason {
 // ---------- ChatStream ----------
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
-	gReq, err := c.buildChatRequest(req)
-	if err != nil {
-		return nil, err
-	}
-
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse",
 		c.baseURL, c.model)
 
-	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
-		url, c.headers(), gReq)
-	if err != nil {
-		return nil, err
-	}
+	var resp *http.Response
+	for retried := false; ; retried = true {
+		gReq, err := c.buildChatRequest(req)
+		if err != nil {
+			return nil, err
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
-		body := make([]byte, 4096)
-		n, _ := resp.Body.Read(body)
-		return nil, c.mapError(resp.StatusCode, body[:n])
+		resp, err = httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
+			url, c.headers(), gReq)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			break
+		}
+
+		body := httpclient.ReadErrorBody(resp.Body)
+		resp.Body.Close()
+		if !retried && c.adaptToRejection(resp.StatusCode, body, gReq) {
+			continue
+		}
+		return nil, c.mapError(resp.StatusCode, body)
 	}
 
 	chunks := make(chan llm.StreamChunk, 64)

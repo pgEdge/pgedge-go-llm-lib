@@ -12,6 +12,7 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -658,6 +659,32 @@ func TestUseCompactDescriptions(t *testing.T) {
 			if got := req.UseCompactDescriptions(tt.baseURL); got != tt.want {
 				t.Errorf("UseCompactDescriptions(%q) with mode %q = %v, want %v",
 					tt.baseURL, tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name          string
+		req, fallback ReasoningEffort
+		want          ReasoningEffort
+		wantErr       bool
+	}{
+		{"both unset", "", "", "", false},
+		{"client default", "", ReasoningEffortLow, ReasoningEffortLow, false},
+		{"request wins", ReasoningEffortHigh, ReasoningEffortLow, ReasoningEffortHigh, false},
+		{"unknown request level", "extreme", ReasoningEffortLow, "", true},
+		{"unknown client default", "", "Low", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ChatRequest{ReasoningEffort: tc.req}.EffectiveReasoningEffort(tc.fallback)
+			if got != tc.want {
+				t.Errorf("effort = %q, want %q", got, tc.want)
+			}
+			if tc.wantErr != errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}

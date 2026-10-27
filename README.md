@@ -92,15 +92,17 @@ import (
 | `HTTPClient`     | `*http.Client`      | Bring your own HTTP client (mTLS, OpenTelemetry round-tripper, corporate proxy). Redirects are refused unless the client sets its own `CheckRedirect`. |
 | `MaxTokens`      | `*int`              | Default response length cap. `nil` → library default of 4096. Use `llm.Int(n)`. |
 | `Temperature`    | `*float64`          | Default sampling temperature. `nil` → omitted from the request, leaving the provider's own default. Use `llm.Float(t)`. |
+| `ReasoningEffort` | `ReasoningEffort`  | Default reasoning effort (`llm.ReasoningEffortNone` through `llm.ReasoningEffortMax`). Unset → omitted, leaving the model's own default. |
 | `RequestTimeout` | `time.Duration`     | Wall-clock cap for a single HTTP attempt (0 → 120 s default). |
 | `MaxResponseBytes` | `int64`           | Cap on a single response body, or a whole stream; a longer response fails with an error (0 → 256 MiB default). |
 | `Retry`          | `RetryConfig`       | Retry policy (see below). |
 | `OnRetry`        | `func(RetryEvent)`  | Observability hook fired before each retry sleep. |
 | `Logger`         | `*slog.Logger`      | Diagnostics sink; `nil` keeps the library silent. Records request adjustments at Debug level (see below). |
 
-**Precedence rule:** `Temperature` and `MaxTokens` on `ChatRequest` override the
-`Options` defaults for that request. A `nil` pointer on `ChatRequest` falls
-through to the `Options` value.
+**Precedence rule:** `Temperature`, `MaxTokens` and `ReasoningEffort` on
+`ChatRequest` override the `Options` defaults for that request. A `nil` pointer
+(or an empty `ReasoningEffort`) on `ChatRequest` falls through to the `Options`
+value.
 
 Leaving `Temperature` unset in both places omits the field from the upstream
 request entirely, which matters because some newer models reject any
@@ -108,7 +110,20 @@ temperature at all; an explicitly-set `0` is preserved and sent as
 `temperature: 0`. A temperature that a model rejects is dropped: the
 Anthropic and OpenAI providers resend the request without it, remember
 that for the rest of the client's life, and log the adjustment to
-`Options.Logger` at Debug level.
+`Options.Logger` at Debug level. On OpenAI the rejection is remembered only
+alongside the kind of reasoning effort it came with, since OpenAI's reasoning
+models accept a temperature at effort `none` and refuse it at every other
+level. Anthropic does not allow a temperature other than 1 alongside thinking,
+so a request that carries adaptive thinking from `ReasoningEffort` leaves any
+other temperature out.
+
+`ReasoningEffort` is translated for each provider: `reasoning_effort` (or
+`reasoning.effort` on `/v1/responses`) on OpenAI, adaptive thinking with
+`output_config.effort` on Anthropic, and `thinkingConfig.thinkingLevel` on
+Gemini; other providers leave it out. A level a model rejects is dropped and
+remembered in the same way as a rejected temperature; on OpenAI, the nearest
+level towards `medium` is sent in its place. See the
+[API reference](docs/api_reference.md#reasoning-effort) for how each level maps.
 
 ### Retry
 
