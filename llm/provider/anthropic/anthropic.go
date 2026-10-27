@@ -45,6 +45,11 @@ type client struct {
 	mu              sync.Mutex
 	cumulativeUsage llm.TokenUsage
 	dropTemperature bool // learned: the model rejects temperature
+
+	// Learned: the thinking types ("adaptive", "disabled") and effort
+	// levels the model rejects, which are then omitted.
+	rejectedThinking map[string]bool
+	rejectedEffort   map[string]bool
 }
 
 // New creates a new Anthropic client.
@@ -166,14 +171,23 @@ type anthropicChatRequest struct {
 	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
 	StopSequences []string             `json:"stop_sequences,omitempty"`
 	Thinking      *anthropicThinking   `json:"thinking,omitempty"`
+	OutputConfig  *anthropicOutputCfg  `json:"output_config,omitempty"`
 	Stream        bool                 `json:"stream,omitempty"`
 }
 
-// anthropicThinking is the wire shape for Anthropic's extended-thinking
-// mode. Type is currently always "enabled".
+// anthropicThinking is the wire shape for Anthropic's thinking setting.
+// Type is "enabled" (extended thinking, from the Extension, with a
+// budget), or "adaptive" or "disabled" (from ChatRequest.ReasoningEffort,
+// with no budget).
 type anthropicThinking struct {
 	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	BudgetTokens *int   `json:"budget_tokens,omitempty"`
+}
+
+// anthropicOutputCfg is the wire shape for output_config, which carries
+// the effort level.
+type anthropicOutputCfg struct {
+	Effort string `json:"effort"`
 }
 
 // anthropic's max_tokens fallback when both client and request leave it unset.
@@ -257,8 +271,12 @@ type anthropicUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if err := c.checkReasoningEffort(req); err != nil {
+		return nil, err
+	}
 	dropTemperature := false // this call only; see adaptToRejection
-	for {
+	applied := map[string]bool{}
+	for sends := 1; ; sends++ {
 		aReq := c.buildChatRequest(req, false)
 		if dropTemperature {
 			aReq.Temperature = nil
@@ -271,8 +289,8 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 			return nil, err
 		}
 		if status < 200 || status >= 300 {
-			if c.adaptToRejection(status, body, &aReq) {
-				dropTemperature = true
+			if c.retryAfterRejection(status, body, &aReq, applied, sends) {
+				dropTemperature = dropTemperature || applied[adjustTemperature]
 				continue
 			}
 			return nil, c.mapError(status, body)
@@ -346,10 +364,14 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) anthropicCha
 		if ext.ExtendedThinking {
 			aReq.Thinking = &anthropicThinking{
 				Type:         "enabled",
-				BudgetTokens: ext.BudgetTokens,
+				BudgetTokens: &ext.BudgetTokens,
 			}
 		}
 	}
+
+	// Reasoning effort. Extended thinking from the Extension, when set,
+	// keeps the thinking field; the effort level is still sent.
+	c.applyReasoningEffort(&aReq, req)
 
 	// ToolChoice: map the normalised ToolChoice onto Anthropic's wire format.
 	// Anthropic accepts {type: "auto"|"any"|"tool", name?: ...}.
@@ -530,9 +552,13 @@ func (c *client) parseChatResponse(aResp *anthropicChatResponse) *llm.ChatRespon
 // ---------- ChatStream ----------
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+	if err := c.checkReasoningEffort(req); err != nil {
+		return nil, err
+	}
 	var resp *http.Response
 	dropTemperature := false // this call only; see adaptToRejection
-	for {
+	applied := map[string]bool{}
+	for sends := 1; ; sends++ {
 		aReq := c.buildChatRequest(req, true)
 		if dropTemperature {
 			aReq.Temperature = nil
@@ -550,8 +576,8 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 
 		body := httpclient.ReadErrorBody(resp.Body)
 		resp.Body.Close()
-		if c.adaptToRejection(resp.StatusCode, body, &aReq) {
-			dropTemperature = true
+		if c.retryAfterRejection(resp.StatusCode, body, &aReq, applied, sends) {
+			dropTemperature = dropTemperature || applied[adjustTemperature]
 			continue
 		}
 		return nil, c.mapError(resp.StatusCode, body)

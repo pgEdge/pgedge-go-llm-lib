@@ -169,6 +169,7 @@ type openaiChatRequest struct {
 	Stream              bool                  `json:"stream,omitempty"`
 	StreamOptions       *streamOptions        `json:"stream_options,omitempty"`
 	ResponseFormat      *openaiResponseFormat `json:"response_format,omitempty"`
+	ReasoningEffort     llm.ReasoningEffort   `json:"reasoning_effort,omitempty"`
 }
 
 type openaiResponseFormat struct {
@@ -252,6 +253,9 @@ type openaiUsage struct {
 }
 
 func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if err := c.checkReasoningEffort(req); err != nil {
+		return nil, err
+	}
 	return sendWithAdjustments(c, func(responses bool) (*llm.ChatResponse, *rejection, error) {
 		if responses {
 			return c.chatResponses(ctx, req)
@@ -293,6 +297,7 @@ func (r openaiChatRequest) rejection(status int, body []byte) *rejection {
 		body:        body,
 		maxTokens:   r.MaxTokens != nil,
 		temperature: r.Temperature != nil,
+		effort:      r.ReasoningEffort,
 	}
 }
 
@@ -332,6 +337,11 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRe
 	} else {
 		oaiReq.Temperature = c.opts.Temperature
 	}
+
+	// Reasoning effort: per-request → client default → omit, and
+	// omitted once the model has rejected the level. OpenAI accepts
+	// every llm.ReasoningEffort value by name.
+	oaiReq.ReasoningEffort = c.reasoningEffort(req)
 
 	// Tools.
 	if len(req.Tools) > 0 {
@@ -660,6 +670,9 @@ type streamDeltaFunction struct {
 }
 
 func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stream, error) {
+	if err := c.checkReasoningEffort(req); err != nil {
+		return nil, err
+	}
 	return sendWithAdjustments(c, func(responses bool) (*llm.Stream, *rejection, error) {
 		if responses {
 			return c.chatStreamResponses(ctx, req)

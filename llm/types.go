@@ -11,6 +11,7 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -231,6 +232,74 @@ type ChatRequest struct {
 	// ToolDescriptionAuto both auto-select compact descriptions when the
 	// provider's base URL is local; see ToolDescriptionMode.
 	ToolDescriptions ToolDescriptionMode
+	// ReasoningEffort sets how much the model reasons before it
+	// answers. The zero value falls through to Options.ReasoningEffort,
+	// and when both are unset the field is left out of the request; see
+	// ReasoningEffort for how each provider translates it.
+	ReasoningEffort ReasoningEffort
+}
+
+// ReasoningEffort is a provider-neutral reasoning effort level. Each
+// provider translates it into its own field:
+//
+//   - OpenAI sends it as reasoning_effort on /v1/chat/completions and as
+//     reasoning.effort on /v1/responses.
+//   - Anthropic sends thinking {type: "adaptive"} with output_config
+//     {effort}, mapping Minimal to "low"; None sends thinking {type:
+//     "disabled"} instead.
+//   - Gemini sends generationConfig.thinkingConfig.thinkingLevel,
+//     mapping None to "minimal" and XHigh and Max to "high".
+//   - Providers without an effort control leave it out.
+//
+// Which levels a model accepts varies by model. When a model rejects a
+// level, the provider retries the request without it and remembers the
+// rejection for the rest of the client's life, as it does for other
+// rejected parameters; see Options.Logger. Providers that honour the
+// setting return an error wrapping ErrInvalidRequest, before sending,
+// for a value that is not one of the constants below.
+type ReasoningEffort string
+
+// ReasoningEffort values recognised by ChatRequest.ReasoningEffort and
+// Options.ReasoningEffort.
+const (
+	ReasoningEffortDefault ReasoningEffort = "" // leave it to the model
+	ReasoningEffortNone    ReasoningEffort = "none"
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortMedium  ReasoningEffort = "medium"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+	ReasoningEffortMax     ReasoningEffort = "max"
+)
+
+// Valid reports whether e is the zero value or one of the recognised
+// levels.
+func (e ReasoningEffort) Valid() bool {
+	switch e {
+	case ReasoningEffortDefault, ReasoningEffortNone, ReasoningEffortMinimal,
+		ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh,
+		ReasoningEffortXHigh, ReasoningEffortMax:
+		return true
+	}
+	return false
+}
+
+// EffectiveReasoningEffort returns the request's reasoning effort, or
+// clientDefault when the request leaves it unset. The error, for a
+// level that is not recognised, is a *ProviderError wrapping
+// ErrInvalidRequest with Provider unset; providers fill it in.
+func (r ChatRequest) EffectiveReasoningEffort(clientDefault ReasoningEffort) (ReasoningEffort, error) {
+	e := r.ReasoningEffort
+	if e == ReasoningEffortDefault {
+		e = clientDefault
+	}
+	if !e.Valid() {
+		return ReasoningEffortDefault, &ProviderError{
+			Err:     ErrInvalidRequest,
+			Message: fmt.Sprintf("unknown reasoning effort %q", string(e)),
+		}
+	}
+	return e, nil
 }
 
 // UseCompactDescriptions reports whether tool descriptions should be sent in
@@ -351,10 +420,12 @@ type RetryConfig struct {
 // Options configures an LLM client.
 //
 // Precedence rule: fields that appear on BOTH Options and ChatRequest
-// (Temperature, MaxTokens) are CLIENT-LEVEL DEFAULTS on Options.
+// (Temperature, MaxTokens, ReasoningEffort) are CLIENT-LEVEL DEFAULTS
+// on Options.
 // When the same field is set on a per-request ChatRequest, the
-// per-request value takes precedence. A nil pointer on a ChatRequest
-// field falls through to the Options default.
+// per-request value takes precedence. A nil pointer (or, for
+// ReasoningEffort, the zero value) on a ChatRequest field falls through
+// to the Options default.
 //
 // Fields that appear ONLY on Options (APIKey, Model, BaseURL,
 // CustomHeaders, Retry, RequestTimeout, HTTPClient, OnRetry, Extensions)
@@ -406,6 +477,11 @@ type Options struct {
 	// (e.g. newer Claude models) reject any temperature value outright.
 	// Leaving it nil now genuinely omits it.
 	Temperature *float64
+
+	// ReasoningEffort is the client default for ChatRequest's field of
+	// the same name, used when a request leaves it unset. The zero
+	// value leaves reasoning effort to the model.
+	ReasoningEffort ReasoningEffort
 
 	// RequestTimeout caps the wall-clock time of a single HTTP request,
 	// including all retries. Zero (default) uses the library's

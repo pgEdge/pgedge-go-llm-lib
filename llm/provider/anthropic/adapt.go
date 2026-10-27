@@ -11,8 +11,11 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
 // temperatureRejections are the phrases that, alongside the word
@@ -46,51 +49,173 @@ func (c *client) omitTemperature() bool {
 	return c.dropTemperature
 }
 
-// adaptToRejection inspects a failed /messages response and reports
-// whether the request should be rebuilt and resent without temperature.
-// It only adapts when the request actually carried a temperature and the
-// model rejected it. When the request also enabled extended thinking,
-// the rejection may be down to that per-request setting rather than the
-// model, so the caller omits temperature for this call only; otherwise
-// the client omits it from every later request, since a client is bound
-// to a single model. As the resent request carries no temperature, a
-// caller loops at most once.
-func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRequest) bool {
-	if status != http.StatusBadRequest || sent.Temperature == nil {
-		return false
+// maxSends bounds the requests one Chat or ChatStream call makes, so a
+// chain of adjustments (temperature, thinking type and effort level,
+// each rejected in turn) can complete without looping.
+const maxSends = 4
+
+// Adjustment names, used as the "param" attribute in log records.
+const (
+	adjustTemperature = "temperature"
+	adjustThinking    = "thinking"
+	adjustEffort      = "effort"
+)
+
+// checkReasoningEffort returns an error for a request whose reasoning
+// effort, or the client default it falls back to, is not a recognised
+// level, so that it fails before any network call.
+func (c *client) checkReasoningEffort(req llm.ChatRequest) error {
+	_, err := req.EffectiveReasoningEffort(c.opts.ReasoningEffort)
+	var pe *llm.ProviderError
+	if errors.As(err, &pe) {
+		pe.Provider = providerName
 	}
-	var errResp anthropicErrorResponse
-	if err := json.Unmarshal(body, &errResp); err != nil ||
-		errResp.Error.Type != "invalid_request_error" ||
-		!rejectsTemperature(errResp.Error.Message) {
-		return false
+	return err
+}
+
+// effortLevels maps each llm.ReasoningEffort that Anthropic sends as
+// output_config.effort to its wire value. Anthropic has no "minimal",
+// so it is sent as the lowest level, "low". None is not here: it turns
+// thinking off rather than setting an effort.
+var effortLevels = map[llm.ReasoningEffort]string{
+	llm.ReasoningEffortMinimal: "low",
+	llm.ReasoningEffortLow:     "low",
+	llm.ReasoningEffortMedium:  "medium",
+	llm.ReasoningEffortHigh:    "high",
+	llm.ReasoningEffortXHigh:   "xhigh",
+	llm.ReasoningEffortMax:     "max",
+}
+
+// applyReasoningEffort sets thinking and output_config on aReq from the
+// request's reasoning effort (or the client default). A level sends
+// thinking {type: "adaptive"} with output_config {effort}; None sends
+// thinking {type: "disabled"}. Thinking already set by the Extension is
+// left alone, and anything the model has rejected is omitted.
+func (c *client) applyReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRequest) {
+	effort, err := req.EffectiveReasoningEffort(c.opts.ReasoningEffort)
+	if err != nil || effort == llm.ReasoningEffortDefault {
+		return
 	}
 
-	if sent.Thinking != nil {
-		c.logAdjustment("omitted for this request")
-		return true
+	thinking := "adaptive"
+	if effort == llm.ReasoningEffortNone {
+		thinking = "disabled"
 	}
 
 	c.mu.Lock()
-	learned := !c.dropTemperature
-	c.dropTemperature = true
-	c.mu.Unlock()
-
-	// Log only the first time, so concurrent calls that all hit the
-	// rejection produce a single record.
-	if learned {
-		c.logAdjustment("omitted")
+	defer c.mu.Unlock()
+	if aReq.Thinking == nil && !c.rejectedThinking[thinking] {
+		aReq.Thinking = &anthropicThinking{Type: thinking}
 	}
-	return true
+	if level, ok := effortLevels[effort]; ok && !c.rejectedEffort[level] {
+		aReq.OutputConfig = &anthropicOutputCfg{Effort: level}
+	}
 }
 
-// logAdjustment records at Debug level that temperature was dropped.
-func (c *client) logAdjustment(action string) {
+// adaptToRejection inspects a failed /messages response and returns the
+// adjustment that lets the request be rebuilt and resent, or "" when
+// there is none. It only adapts when the request actually carried the
+// parameter the model rejected:
+//
+//   - Temperature: when the request also carried thinking, the
+//     rejection may be down to that per-request setting rather than the
+//     model, so the caller omits temperature for this call only;
+//     otherwise the client omits it from every later request, since a
+//     client is bound to a single model.
+//   - Effort level or thinking type set from ReasoningEffort: the client
+//     omits that level or type from every later request.
+//
+// Thinking the Extension set ("enabled") is the caller's explicit
+// choice and is never dropped.
+func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRequest) string {
+	if status != http.StatusBadRequest {
+		return ""
+	}
+	var errResp anthropicErrorResponse
+	if err := json.Unmarshal(body, &errResp); err != nil ||
+		errResp.Error.Type != "invalid_request_error" {
+		return ""
+	}
+	msg := strings.ToLower(errResp.Error.Message)
+
+	switch {
+	case sent.Temperature != nil && rejectsTemperature(msg):
+		if sent.Thinking != nil {
+			c.logAdjustment(adjustTemperature, "omitted for this request")
+			return adjustTemperature
+		}
+		if c.learn(&c.dropTemperature) {
+			c.logAdjustment(adjustTemperature, "omitted")
+		}
+		return adjustTemperature
+
+	// Checked before thinking, since an effort rejection can mention
+	// thinking ("output_config.effort 'xhigh' is not supported when
+	// thinking is disabled"). A rejection of a thinking type can mention
+	// effort too, pointing at the fields to use instead, so one naming
+	// thinking.type is left to the thinking case.
+	case sent.OutputConfig != nil && strings.Contains(msg, "effort") &&
+		!strings.Contains(msg, "thinking.type"):
+		if c.learnRejected(&c.rejectedEffort, sent.OutputConfig.Effort) {
+			c.logAdjustment(adjustEffort, "omitted "+sent.OutputConfig.Effort)
+		}
+		return adjustEffort
+
+	case sent.Thinking != nil && sent.Thinking.Type != "enabled" &&
+		strings.Contains(msg, "thinking") && !strings.Contains(msg, "temperature"):
+		if c.learnRejected(&c.rejectedThinking, sent.Thinking.Type) {
+			c.logAdjustment(adjustThinking, "omitted "+sent.Thinking.Type)
+		}
+		return adjustThinking
+	}
+	return ""
+}
+
+// learn sets a learned flag and reports whether it was newly set, so
+// that concurrent calls that all hit the same rejection log once.
+func (c *client) learn(flag *bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	first := !*flag
+	*flag = true
+	return first
+}
+
+// learnRejected adds value to a learned set and reports whether it was
+// newly added.
+func (c *client) learnRejected(set *map[string]bool, value string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if *set == nil {
+		*set = map[string]bool{}
+	}
+	first := !(*set)[value]
+	(*set)[value] = true
+	return first
+}
+
+// logAdjustment records an adjustment at Debug level.
+func (c *client) logAdjustment(param, action string) {
 	if c.opts.Logger != nil {
 		c.opts.Logger.Debug("adjusted request after provider rejected a parameter",
 			"provider", providerName,
 			"model", c.model,
-			"param", "temperature",
+			"param", param,
 			"action", action)
 	}
+}
+
+// retryAfterRejection reports whether a call should rebuild and resend
+// its request after a rejection: when adaptToRejection finds an
+// adjustment the call has not already applied, and the call has sends
+// left. The adjustment is recorded in applied, so each is applied at
+// most once per call.
+func (c *client) retryAfterRejection(status int, body []byte, sent *anthropicChatRequest,
+	applied map[string]bool, sends int) bool {
+	adj := c.adaptToRejection(status, body, sent)
+	if adj == "" || applied[adj] {
+		return false
+	}
+	applied[adj] = true
+	return sends < maxSends
 }

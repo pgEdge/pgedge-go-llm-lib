@@ -97,8 +97,8 @@ type ProviderConstructor func(opts Options) (Client, error)
 ## Options
 
 `Options` configures an LLM client. Fields that overlap with
-`ChatRequest` (`Temperature`, `MaxTokens`) are client-level
-defaults; `ChatRequest` fields override them per-request.
+`ChatRequest` (`Temperature`, `MaxTokens`, `ReasoningEffort`) are
+client-level defaults; `ChatRequest` fields override them per-request.
 
 ```go
 type Options struct {
@@ -109,6 +109,7 @@ type Options struct {
     HTTPClient    *http.Client
     MaxTokens     *int
     Temperature   *float64
+    ReasoningEffort ReasoningEffort
     RequestTimeout time.Duration
     PerAttemptTimeout time.Duration
     MaxResponseBytes int64
@@ -126,6 +127,7 @@ type Options struct {
 | `HTTPClient`     | library-built | Custom `*http.Client` (mTLS, round-trippers). Redirects are refused unless the client sets its own `CheckRedirect`. |
 | `MaxTokens`      | `4096`      | Default response length cap. Use `llm.Int(n)`. |
 | `Temperature`    | omitted     | Default sampling temperature. Unset means the field is left out of the upstream request, so the provider's own default applies; some newer models reject any temperature value. Use `llm.Float(t)`. |
+| `ReasoningEffort` | omitted    | Default reasoning effort; see [Reasoning effort](#reasoning-effort). |
 | `RequestTimeout` | `120s`      | Wall-clock cap per request, spanning all retries. |
 | `PerAttemptTimeout` | `0` (off) | Wall-clock cap per attempt; makes slow attempts retryable. Set below `RequestTimeout`. |
 | `MaxResponseBytes` | `256 MiB` | Cap on a single response body, or a whole stream; a longer response fails with an error. |
@@ -312,6 +314,7 @@ type ChatRequest struct {
     ResponseFormat *ResponseFormat
     ToolChoice     *ToolChoice
     StopSequences  []string
+    ReasoningEffort ReasoningEffort
 }
 ```
 
@@ -326,6 +329,33 @@ type ChatRequest struct {
 | `ResponseFormat` | Constrain output format; see `ResponseFormatType`. |
 | `ToolChoice`     | Control tool-selection behaviour; see `ToolChoiceMode`. |
 | `StopSequences`  | Strings that terminate generation (most providers cap at 4). |
+| `ReasoningEffort` | Override client default (`""` → use `Options.ReasoningEffort`); see [Reasoning effort](#reasoning-effort). |
+
+### Reasoning effort
+
+`ReasoningEffort` sets how much the model reasons before it answers,
+with one of `llm.ReasoningEffortNone`, `Minimal`, `Low`, `Medium`,
+`High`, `XHigh` or `Max`. Leaving it unset on both `ChatRequest` and
+`Options` leaves the field out of the request, so the model's own
+default applies. An unknown value fails with `ErrInvalidRequest`
+before any request is sent. Each provider translates the level:
+
+| Provider  | Sent as |
+|-----------|---------|
+| OpenAI    | `reasoning_effort` on `/v1/chat/completions` and `reasoning: {effort}` on `/v1/responses`, with the level unchanged. |
+| Anthropic | `thinking: {type: "adaptive"}` with `output_config: {effort}`; `Minimal` is sent as `low`, and `None` sends `thinking: {type: "disabled"}` with no effort. Thinking set through `anthropic.WithExtendedThinking` takes precedence over the adaptive setting, but the effort is still sent. |
+| Gemini    | `generationConfig.thinkingConfig.thinkingLevel`; `None` is sent as `minimal`, and `XHigh` and `Max` as `high`. |
+| Others    | Left out. |
+
+Models differ in which levels they accept. When a model rejects a
+level, the OpenAI, Anthropic and Gemini providers resend the request
+without it, remember the rejection for the rest of the client's life,
+and log the adjustment to `Options.Logger` at Debug level. Anthropic
+drops the adaptive or disabled thinking setting and the effort level
+separately, so a model that accepts an effort but not adaptive
+thinking still gets the effort; on OpenAI, a model that rejects the
+parameter itself, rather than one level, has it omitted at every
+level.
 
 ---
 

@@ -34,6 +34,12 @@ type responsesRequest struct {
 	ToolChoice      any                     `json:"tool_choice,omitempty"`
 	Stream          bool                    `json:"stream,omitempty"`
 	Text            *responsesTextFormatCfg `json:"text,omitempty"`
+	Reasoning       *responsesReasoning     `json:"reasoning,omitempty"`
+}
+
+// responsesReasoning is the /v1/responses reasoning configuration.
+type responsesReasoning struct {
+	Effort llm.ReasoningEffort `json:"effort"`
 }
 
 // responsesInputItem is one element of the Responses API "input" array.
@@ -169,6 +175,12 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 		out.Temperature = req.Temperature
 	} else {
 		out.Temperature = c.opts.Temperature
+	}
+
+	// Reasoning effort: as for /chat/completions, sent as
+	// reasoning.effort.
+	if effort := c.reasoningEffort(req); effort != llm.ReasoningEffortDefault {
+		out.Reasoning = &responsesReasoning{Effort: effort}
 	}
 
 	if len(req.Tools) > 0 {
@@ -374,7 +386,16 @@ func (r responsesRequest) rejection(status int, body []byte) *rejection {
 		body:        body,
 		responses:   true,
 		temperature: r.Temperature != nil,
+		effort:      r.effort(),
 	}
+}
+
+// effort returns the reasoning effort this request carried, if any.
+func (r responsesRequest) effort() llm.ReasoningEffort {
+	if r.Reasoning == nil {
+		return llm.ReasoningEffortDefault
+	}
+	return r.Reasoning.Effort
 }
 
 func parseResponsesResponse(raw *responsesResponse) *llm.ChatResponse {
