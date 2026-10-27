@@ -233,6 +233,8 @@ type anthropicChatResponse struct {
 //	"document"     -> Source, optional Title
 //	"tool_use"     -> ID, Name, Input
 //	"tool_result"  -> ToolUseID, Content, IsError
+//	"thinking"     -> Thinking, Signature
+//	"redacted_thinking" -> Data
 type anthropicContentBlock struct {
 	Type  string          `json:"type"`
 	Text  string          `json:"text,omitempty"`
@@ -251,6 +253,15 @@ type anthropicContentBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+
+	// Thinking and Signature: populated for "thinking". Thinking is a
+	// pointer so that an empty string, which is what Anthropic returns
+	// when thinking text is omitted, is still sent back.
+	Thinking  *string `json:"thinking,omitempty"`
+	Signature string  `json:"signature,omitempty"`
+
+	// Data: populated for "redacted_thinking".
+	Data string `json:"data,omitempty"`
 
 	// Cache control — Anthropic prompt-caching marker.
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
@@ -518,6 +529,19 @@ func convertBlock(b llm.ContentBlock) anthropicContentBlock {
 		out.ToolUseID = b.ToolUseID
 		out.Content = b.Text
 		out.IsError = b.IsError
+	case llm.BlockThinking:
+		// Sent back exactly as received; Anthropic rejects a request
+		// whose latest assistant turn carries a modified block.
+		var text string
+		if b.Thinking != nil {
+			text = b.Thinking.Text
+			out.Signature = b.Thinking.Signature
+		}
+		out.Thinking = &text
+	case llm.BlockRedactedThinking:
+		if b.Thinking != nil {
+			out.Data = b.Thinking.Data
+		}
 	}
 	if b.CacheControl != nil {
 		out.CacheControl = &anthropicCacheControl{Type: b.CacheControl.Type}
@@ -554,6 +578,22 @@ func (c *client) parseChatResponse(aResp *anthropicChatResponse) *llm.ChatRespon
 					Name:  block.Name,
 					Input: block.Input,
 				},
+			})
+		case "thinking":
+			// Kept so the caller sends it back on the next request,
+			// which Anthropic requires within a tool-use turn.
+			var text string
+			if block.Thinking != nil {
+				text = *block.Thinking
+			}
+			resp.Content = append(resp.Content, llm.ContentBlock{
+				Type:     llm.BlockThinking,
+				Thinking: &llm.Thinking{Text: text, Signature: block.Signature},
+			})
+		case "redacted_thinking":
+			resp.Content = append(resp.Content, llm.ContentBlock{
+				Type:     llm.BlockRedactedThinking,
+				Thinking: &llm.Thinking{Data: block.Data},
 			})
 		}
 	}
@@ -617,14 +657,19 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 				Type         string `json:"type"`
 				Index        int    `json:"index"`
 				ContentBlock *struct {
-					Type string `json:"type"`
-					ID   string `json:"id,omitempty"`
-					Name string `json:"name,omitempty"`
+					Type      string `json:"type"`
+					ID        string `json:"id,omitempty"`
+					Name      string `json:"name,omitempty"`
+					Thinking  string `json:"thinking,omitempty"`
+					Signature string `json:"signature,omitempty"`
+					Data      string `json:"data,omitempty"`
 				} `json:"content_block,omitempty"`
 				Delta *struct {
 					Type        string `json:"type,omitempty"`
 					Text        string `json:"text,omitempty"`
 					PartialJSON string `json:"partial_json,omitempty"`
+					Thinking    string `json:"thinking,omitempty"`
+					Signature   string `json:"signature,omitempty"`
 					StopReason  string `json:"stop_reason,omitempty"`
 				} `json:"delta,omitempty"`
 				Message *struct {
@@ -649,12 +694,28 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 				}
 
 			case "content_block_start":
-				if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+				if event.ContentBlock == nil {
+					break
+				}
+				switch event.ContentBlock.Type {
+				case "tool_use":
 					chunks <- llm.StreamChunk{
 						Type: llm.ChunkToolUseStart,
 						ToolUse: &llm.ToolUse{
 							ID:   event.ContentBlock.ID,
 							Name: event.ContentBlock.Name,
+						},
+					}
+				case "thinking", "redacted_thinking":
+					// A redacted block carries its data here; a
+					// thinking block's text and signature follow as
+					// deltas.
+					chunks <- llm.StreamChunk{
+						Type: llm.ChunkThinkingStart,
+						Thinking: &llm.Thinking{
+							Text:      event.ContentBlock.Thinking,
+							Signature: event.ContentBlock.Signature,
+							Data:      event.ContentBlock.Data,
 						},
 					}
 				}
@@ -674,6 +735,20 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 							chunks <- llm.StreamChunk{
 								Type:    llm.ChunkToolUseDelta,
 								Partial: event.Delta.PartialJSON,
+							}
+						}
+					case "thinking_delta":
+						if event.Delta.Thinking != "" {
+							chunks <- llm.StreamChunk{
+								Type:     llm.ChunkThinkingDelta,
+								Thinking: &llm.Thinking{Text: event.Delta.Thinking},
+							}
+						}
+					case "signature_delta":
+						if event.Delta.Signature != "" {
+							chunks <- llm.StreamChunk{
+								Type:     llm.ChunkThinkingDelta,
+								Thinking: &llm.Thinking{Signature: event.Delta.Signature},
 							}
 						}
 					}

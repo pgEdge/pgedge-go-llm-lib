@@ -83,6 +83,15 @@ result. Passing `resp.Content` straight to
 field; constructing a fresh `ToolUse` from the name and
 arguments alone discards the value and breaks the next turn.
 
+Anthropic, with thinking on, puts the model's reasoning ahead of
+the tool call as `BlockThinking` and `BlockRedactedThinking`
+content blocks, and rejects a tool result whose assistant turn
+does not carry them unchanged and in their original order.
+Passing `resp.Content` to `llm.AssistantBlocks` keeps them too,
+whereas copying only the tool-use blocks into a new message
+drops them. Other providers ignore thinking blocks, so a
+conversation that carries them can still be sent to one.
+
 ## Executing Tools and Sending Results
 
 After executing a tool, send the result back by appending
@@ -250,7 +259,8 @@ full `Input`.
 
 Alternatively, use `stream.Collect(ctx)` which buffers the
 entire stream and returns a `*ChatResponse` with complete
-`BlockToolUse` content blocks ready to pass back to the model.
+`BlockToolUse` content blocks, and any thinking blocks, ready to
+pass back to the model.
 
 See the [Streaming](streaming.md) document for a worked
 example.

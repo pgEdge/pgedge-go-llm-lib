@@ -95,6 +95,8 @@ than string literals:
 | `llm.ChunkText`       | `text`          | A text content delta.                  |
 | `llm.ChunkToolUseStart` | `tool_use_start` | A tool call has started.             |
 | `llm.ChunkToolUseDelta` | `tool_use_delta` | A partial tool call argument fragment. |
+| `llm.ChunkThinkingStart` | `thinking_start` | A block of the model's reasoning has started. |
+| `llm.ChunkThinkingDelta` | `thinking_delta` | A fragment of the reasoning text or signature. |
 | `llm.ChunkDone`       | `done`          | The stream is complete.                |
 
 ## Processing Text Chunks
@@ -188,9 +190,50 @@ stream delivered, as shown above. Building a replacement from the
 name and arguments alone discards `Signature`, and Gemini's
 thinking models then reject the follow-up request outright.
 
+The example replays only the tool call, which is not enough for
+Anthropic with thinking on: the assistant turn must also carry the
+thinking blocks that came before the call, as described in
+[Processing Thinking Chunks](#processing-thinking-chunks).
+
 Alternatively, use `stream.Collect` which handles this buffering
 automatically and returns a `*ChatResponse` with complete
-`BlockToolUse` content blocks, `Signature` included.
+`BlockToolUse` content blocks, `Signature` included, along with
+any thinking blocks, in the order the model produced them.
+
+## Processing Thinking Chunks
+
+When thinking is on, Anthropic streams each block of the model's
+reasoning as a `llm.ChunkThinkingStart` chunk followed by
+`llm.ChunkThinkingDelta` chunks. Each delta's `chunk.Thinking`
+carries a fragment of either the reasoning `Text` or the opaque
+`Signature`; a redacted block arrives whole on its start chunk,
+with `Thinking.Data` set. Newer models leave the text out by
+default, so a block may consist of a signature alone.
+
+Anthropic requires these blocks to come back, unchanged and in
+their original order, in the assistant turn sent with a tool
+result. `stream.Collect` assembles them for you; a consumer that
+reads chunks itself can pass each chunk to an
+`llm.ThinkingAccumulator`, which returns the finished
+`BlockThinking` or `BlockRedactedThinking` content block when the
+next one starts, or when `Flush` is called at the end of the block:
+
+```go
+var thinking llm.ThinkingAccumulator
+var blocks []llm.ContentBlock
+
+switch chunk.Type {
+case llm.ChunkThinkingStart, llm.ChunkThinkingDelta:
+    if b, ok := thinking.Add(chunk); ok {
+        blocks = append(blocks, b)
+    }
+default:
+    if b, ok := thinking.Flush(); ok {
+        blocks = append(blocks, b)
+    }
+    // Handle text and tool-use chunks as above.
+}
+```
 
 ## Token Usage in Streams
 

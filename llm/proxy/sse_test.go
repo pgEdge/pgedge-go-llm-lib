@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -260,5 +261,42 @@ func TestSSEWriterDoesNotDoubleEmitDone(t *testing.T) {
 	count := strings.Count(out, "event: done")
 	if count != 1 {
 		t.Errorf("got %d done events, want exactly 1\n%s", count, out)
+	}
+}
+
+func TestSSEWriterAccumulatesThinkingBlocks(t *testing.T) {
+	// The bridge assembles thinking blocks just as Stream.Collect does,
+	// so hooks see them whole and in order.
+	src := []llm.StreamChunk{
+		{Type: llm.ChunkThinkingStart, Thinking: &llm.Thinking{}},
+		{Type: llm.ChunkThinkingDelta, Thinking: &llm.Thinking{Text: "Hmm."}},
+		{Type: llm.ChunkThinkingDelta, Thinking: &llm.Thinking{Signature: "sig-A"}},
+		{Type: llm.ChunkThinkingStart, Thinking: &llm.Thinking{Data: "opaque-data"}},
+		{Type: llm.ChunkText, Text: "answer"},
+		{Type: llm.ChunkDone, Usage: &llm.TokenUsage{TotalTokens: 3}},
+	}
+	chunks := make(chan llm.StreamChunk, len(src))
+	errCh := make(chan error, 1)
+	for _, c := range src {
+		chunks <- c
+	}
+	close(chunks)
+	close(errCh)
+
+	buf := &fakeFlushBuffer{}
+	resp, err := writeSSE(buf, &llm.Stream{Chunks: chunks, Err: errCh})
+	if err != nil {
+		t.Fatalf("writeSSE: %v", err)
+	}
+	want := []llm.ContentBlock{
+		{Type: llm.BlockThinking, Thinking: &llm.Thinking{Text: "Hmm.", Signature: "sig-A"}},
+		{Type: llm.BlockRedactedThinking, Thinking: &llm.Thinking{Data: "opaque-data"}},
+		{Type: llm.BlockText, Text: "answer"},
+	}
+	if !reflect.DeepEqual(resp.Content, want) {
+		t.Errorf("Content = %+v, want %+v", resp.Content, want)
+	}
+	if !strings.Contains(buf.String(), `"type":"thinking_delta","thinking":{"signature":"sig-A"}`) {
+		t.Errorf("SSE output does not carry the signature delta: %s", buf.String())
 	}
 }

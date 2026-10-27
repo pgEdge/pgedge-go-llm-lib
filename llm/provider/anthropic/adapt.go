@@ -50,10 +50,10 @@ func (c *client) omitTemperature() bool {
 }
 
 // maxSends bounds the requests one Chat or ChatStream call makes, so a
-// chain of adjustments (temperature, thinking type, effort level and
-// the cache_control marker, each rejected in turn) can complete
-// without looping.
-const maxSends = 5
+// chain of adjustments (temperature, thinking type, effort level, the
+// cache_control marker and the replayed thinking blocks, each rejected
+// in turn) can complete without looping.
+const maxSends = 6
 
 // Adjustment names, used as the "param" attribute in log records.
 const (
@@ -61,6 +61,11 @@ const (
 	adjustThinking    = "thinking"
 	adjustEffort      = "effort"
 	adjustCaching     = "cache_control"
+
+	// adjustThinkingBlocks marks thinking and redacted-thinking blocks
+	// removed from a call's message history, for that call only; see
+	// adaptToRejection.
+	adjustThinkingBlocks = "thinking blocks"
 )
 
 // adjustCachingThisCall marks, in a call's applied adjustments, a
@@ -169,6 +174,18 @@ func (c *client) setReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRequ
 //     resend without it succeeds (see confirmAdjustments); if that
 //     resend fails the same way, the error stands.
 //
+// A rejection of the thinking blocks replayed in the message history
+// teaches the client nothing about the model, since it concerns that
+// conversation alone, so it is never put down to the thinking type:
+//
+//   - An invalid signature: the history changed ahead of a replayed
+//     block, so Anthropic no longer accepts it (the preserved-thinking
+//     prefix check). The call removes every thinking and
+//     redacted-thinking block from the history and sends once more,
+//     which is the recovery Anthropic documents.
+//   - Any other message about thinking blocks, such as one saying they
+//     cannot be modified, is left to stand.
+//
 // Thinking the Extension set ("enabled") is the caller's explicit
 // choice and is never dropped.
 func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRequest) string {
@@ -183,6 +200,10 @@ func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRe
 	msg := strings.ToLower(errResp.Error.Message)
 
 	switch {
+	case strings.Contains(msg, "invalid `signature`") && hasThinkingBlocks(sent):
+		c.logAdjustment(adjustThinkingBlocks, "removed from history for this request")
+		return adjustThinkingBlocks
+
 	case sent.Temperature != nil && rejectsTemperature(msg):
 		if temperatureRejectedForThinking(sent, msg) {
 			c.logAdjustment(adjustTemperature, "omitted for this request")
@@ -215,14 +236,59 @@ func (c *client) adaptToRejection(status int, body []byte, sent *anthropicChatRe
 		}
 		return adjustCaching
 
+	// A message about thinking that mentions blocks is about the
+	// thinking blocks in the history rather than the type.
 	case sent.Thinking != nil && sent.Thinking.Type != "enabled" &&
-		strings.Contains(msg, "thinking") && !strings.Contains(msg, "temperature"):
+		strings.Contains(msg, "thinking") && !strings.Contains(msg, "temperature") &&
+		!strings.Contains(msg, "block"):
 		if c.learnRejected(&c.rejectedThinking, sent.Thinking.Type) {
 			c.logAdjustment(adjustThinking, "omitted "+sent.Thinking.Type)
 		}
 		return adjustThinking
 	}
 	return ""
+}
+
+// hasThinkingBlocks reports whether any message in aReq carries a
+// thinking or redacted-thinking block.
+func hasThinkingBlocks(aReq *anthropicChatRequest) bool {
+	for _, m := range aReq.Messages {
+		for _, b := range m.Content {
+			if isThinkingBlock(b) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isThinkingBlock reports whether b is a thinking or redacted-thinking
+// block.
+func isThinkingBlock(b anthropicContentBlock) bool {
+	return b.Type == string(llm.BlockThinking) || b.Type == string(llm.BlockRedactedThinking)
+}
+
+// stripThinkingBlocks removes every thinking and redacted-thinking
+// block from aReq's messages, leaving each message's other blocks in
+// place. A message that held nothing but thinking blocks is dropped
+// rather than sent with empty content; the Messages API combines the
+// consecutive same-role turns this can leave behind into one turn.
+func stripThinkingBlocks(aReq *anthropicChatRequest) {
+	msgs := make([]anthropicMessage, 0, len(aReq.Messages))
+	for _, m := range aReq.Messages {
+		kept := make([]anthropicContentBlock, 0, len(m.Content))
+		for _, b := range m.Content {
+			if !isThinkingBlock(b) {
+				kept = append(kept, b)
+			}
+		}
+		if len(kept) == 0 && len(m.Content) > 0 {
+			continue
+		}
+		m.Content = kept
+		msgs = append(msgs, m)
+	}
+	aReq.Messages = msgs
 }
 
 // temperatureRejectedForThinking reports whether a temperature
@@ -311,6 +377,9 @@ func omitForCall(aReq *anthropicChatRequest, applied map[string]bool) {
 	}
 	if applied[adjustCachingThisCall] {
 		aReq.CacheControl = nil
+	}
+	if applied[adjustThinkingBlocks] {
+		stripThinkingBlocks(aReq)
 	}
 }
 

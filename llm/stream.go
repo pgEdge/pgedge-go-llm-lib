@@ -38,6 +38,18 @@ const (
 	// full ToolUse.Input.
 	ChunkToolUseDelta StreamChunkType = "tool_use_delta"
 
+	// ChunkThinkingStart announces a new block of the model's
+	// reasoning in StreamChunk.Thinking. A redacted block arrives
+	// whole, with Thinking.Data populated; a thinking block's text and
+	// signature usually follow in ChunkThinkingDelta chunks.
+	ChunkThinkingStart StreamChunkType = "thinking_start"
+
+	// ChunkThinkingDelta carries an incremental fragment of the
+	// current thinking block's Text or Signature in
+	// StreamChunk.Thinking. Consumers concatenate each field
+	// separately to reconstruct the block.
+	ChunkThinkingDelta StreamChunkType = "thinking_delta"
+
 	// ChunkDone is the final chunk emitted by a stream. Usage is
 	// always non-nil; if the upstream provider does not report
 	// token counts, Usage is the zero TokenUsage.
@@ -61,13 +73,69 @@ type Stream struct {
 //	ChunkText            -> Text
 //	ChunkToolUseStart    -> ToolUse
 //	ChunkToolUseDelta    -> Partial
+//	ChunkThinkingStart   -> Thinking
+//	ChunkThinkingDelta   -> Thinking
 //	ChunkDone            -> Usage
 type StreamChunk struct {
-	Type    StreamChunkType `json:"type"`
-	Text    string          `json:"text,omitempty"`
-	ToolUse *ToolUse        `json:"tool_use,omitempty"`
-	Partial string          `json:"partial,omitempty"`
-	Usage   *TokenUsage     `json:"usage,omitempty"`
+	Type     StreamChunkType `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ToolUse  *ToolUse        `json:"tool_use,omitempty"`
+	Thinking *Thinking       `json:"thinking,omitempty"`
+	Partial  string          `json:"partial,omitempty"`
+	Usage    *TokenUsage     `json:"usage,omitempty"`
+}
+
+// ThinkingAccumulator assembles ChunkThinkingStart and
+// ChunkThinkingDelta chunks into thinking content blocks. Stream.Collect
+// uses one, and it is exported for consumers that assemble a response
+// from chunks themselves, such as the proxy's SSE bridge. The zero
+// value is ready to use.
+type ThinkingAccumulator struct {
+	current   *Thinking
+	text      strings.Builder
+	signature strings.Builder
+}
+
+// Add applies a thinking chunk. A ChunkThinkingStart returns the block
+// it ends, if one was in progress, so the caller can append it to the
+// response; chunks of any other type are ignored.
+func (a *ThinkingAccumulator) Add(c StreamChunk) (ContentBlock, bool) {
+	switch c.Type {
+	case ChunkThinkingStart:
+		done, ok := a.Flush()
+		a.current = &Thinking{}
+		if c.Thinking != nil {
+			a.current.Data = c.Thinking.Data
+			a.text.WriteString(c.Thinking.Text)
+			a.signature.WriteString(c.Thinking.Signature)
+		}
+		return done, ok
+	case ChunkThinkingDelta:
+		if a.current != nil && c.Thinking != nil {
+			a.text.WriteString(c.Thinking.Text)
+			a.signature.WriteString(c.Thinking.Signature)
+		}
+	}
+	return ContentBlock{}, false
+}
+
+// Flush returns the block in progress, if any, and resets the
+// accumulator. A block with Data set is a BlockRedactedThinking, and
+// any other a BlockThinking.
+func (a *ThinkingAccumulator) Flush() (ContentBlock, bool) {
+	if a.current == nil {
+		return ContentBlock{}, false
+	}
+	t := a.current
+	t.Text = a.text.String()
+	t.Signature = a.signature.String()
+	a.current = nil
+	a.text.Reset()
+	a.signature.Reset()
+	if t.Data != "" {
+		return ContentBlock{Type: BlockRedactedThinking, Thinking: t}, true
+	}
+	return ContentBlock{Type: BlockThinking, Thinking: t}, true
 }
 
 // Recv returns the next chunk from the stream.
@@ -134,6 +202,7 @@ func (s *Stream) Collect(ctx context.Context) (*ChatResponse, error) {
 	var textBuf strings.Builder
 	var toolBuf strings.Builder
 	var currentTool *ToolUse
+	var thinking ThinkingAccumulator
 
 	flushText := func() {
 		if textBuf.Len() > 0 {
@@ -149,17 +218,52 @@ func (s *Stream) Collect(ctx context.Context) (*ChatResponse, error) {
 			toolBuf.Reset()
 		}
 	}
+	flushThinking := func() {
+		if b, ok := thinking.Flush(); ok {
+			resp.Content = append(resp.Content, b)
+		}
+	}
+	flushAll := func() {
+		flushText()
+		flushTool()
+		flushThinking()
+	}
+	accumulate := func(c StreamChunk) {
+		switch c.Type {
+		case ChunkText:
+			flushTool()
+			flushThinking()
+			textBuf.WriteString(c.Text)
+		case ChunkToolUseStart:
+			flushAll()
+			if c.ToolUse != nil {
+				currentTool = &ToolUse{ID: c.ToolUse.ID, Name: c.ToolUse.Name, Input: c.ToolUse.Input, Signature: c.ToolUse.Signature}
+				if len(currentTool.Input) > 0 {
+					toolBuf.Write(currentTool.Input)
+				}
+			}
+		case ChunkToolUseDelta:
+			toolBuf.WriteString(c.Partial)
+		case ChunkThinkingStart:
+			flushAll()
+			thinking.Add(c)
+		case ChunkThinkingDelta:
+			thinking.Add(c)
+		case ChunkDone:
+			if c.Usage != nil {
+				resp.Usage = *c.Usage
+			}
+		}
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
-			flushText()
-			flushTool()
+			flushAll()
 			return resp, err
 		}
 		chunk, err := s.Recv()
 		if errors.Is(err, io.EOF) {
-			flushText()
-			flushTool()
+			flushAll()
 			return resp, nil
 		}
 		if err != nil {
@@ -171,57 +275,19 @@ func (s *Stream) Collect(ctx context.Context) (*ChatResponse, error) {
 					if !ok {
 						goto doneWithDrain
 					}
-					switch c.Type {
-					case ChunkText:
-						flushTool()
-						textBuf.WriteString(c.Text)
-					case ChunkToolUseStart:
-						flushText()
-						flushTool()
-						if c.ToolUse != nil {
-							currentTool = &ToolUse{ID: c.ToolUse.ID, Name: c.ToolUse.Name, Input: c.ToolUse.Input, Signature: c.ToolUse.Signature}
-							if len(currentTool.Input) > 0 {
-								toolBuf.Write(currentTool.Input)
-							}
-						}
-					case ChunkToolUseDelta:
-						toolBuf.WriteString(c.Partial)
-					case ChunkDone:
-						if c.Usage != nil {
-							resp.Usage = *c.Usage
-						}
-					}
+					accumulate(c)
 				default:
 					goto doneWithDrain
 				}
 			}
 		doneWithDrain:
-			flushText()
-			flushTool()
+			flushAll()
 			return resp, err
 		}
 
-		switch chunk.Type {
-		case ChunkText:
-			flushTool()
-			textBuf.WriteString(chunk.Text)
-		case ChunkToolUseStart:
-			flushText()
-			flushTool()
-			if chunk.ToolUse != nil {
-				currentTool = &ToolUse{ID: chunk.ToolUse.ID, Name: chunk.ToolUse.Name, Input: chunk.ToolUse.Input, Signature: chunk.ToolUse.Signature}
-				if len(currentTool.Input) > 0 {
-					toolBuf.Write(currentTool.Input)
-				}
-			}
-		case ChunkToolUseDelta:
-			toolBuf.WriteString(chunk.Partial)
-		case ChunkDone:
-			flushText()
-			flushTool()
-			if chunk.Usage != nil {
-				resp.Usage = *chunk.Usage
-			}
+		accumulate(chunk)
+		if chunk.Type == ChunkDone {
+			flushAll()
 			return resp, nil
 		}
 	}
