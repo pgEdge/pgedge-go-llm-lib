@@ -664,3 +664,51 @@ func TestNewKeepsCallerRedirectPolicy(t *testing.T) {
 		t.Fatalf("status, dest, err = %d, %v, %v; want the redirect followed", status, dest, err)
 	}
 }
+
+func TestNewTimeoutResolution(t *testing.T) {
+	tests := []struct {
+		name    string
+		base    *http.Client
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{"nil base, no timeout", nil, 0, defaultTimeout},
+		{"nil base, explicit timeout", nil, 5 * time.Second, 5 * time.Second},
+		{"base timeout kept", &http.Client{Timeout: 7 * time.Second}, 0, 7 * time.Second},
+		{"explicit timeout overrides base", &http.Client{Timeout: 7 * time.Second}, 3 * time.Second, 3 * time.Second},
+		{"base without timeout gets default", &http.Client{}, 0, defaultTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := New(tt.base, nil, RetryConfig{Disabled: true}, tt.timeout, 0)
+			if got.Timeout != tt.want {
+				t.Errorf("Timeout = %v, want %v", got.Timeout, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewDoesNotMutateBase(t *testing.T) {
+	inner := &http.Transport{}
+	base := &http.Client{Transport: inner}
+	out := New(base, map[string]string{"X-Test": "1"}, RetryConfig{MaxRetries: 1}, 5*time.Second, 1024)
+	if out == base {
+		t.Fatal("New returned the caller's client rather than a copy")
+	}
+	if base.Transport != inner {
+		t.Error("New replaced the caller's Transport")
+	}
+	if base.CheckRedirect != nil {
+		t.Error("New set CheckRedirect on the caller's client")
+	}
+	if base.Timeout != 0 {
+		t.Errorf("New set Timeout on the caller's client to %v", base.Timeout)
+	}
+	lt, ok := out.Transport.(*limitTransport)
+	if !ok {
+		t.Fatalf("outer transport = %T, want *limitTransport", out.Transport)
+	}
+	if lt.max != 1024 {
+		t.Errorf("limit = %d, want 1024", lt.max)
+	}
+}
