@@ -127,6 +127,18 @@ messages = append(messages, llm.Message{
 })
 ```
 
+Set `isError` to `true` when the tool failed, so that the
+model can tell a failure from a result. Anthropic receives
+the flag as `is_error`, and Gemini receives the text under
+an `error` key in place of `result`. OpenAI (on both Chat
+Completions and the Responses API) and Ollama have no field
+for a failed tool result, so those providers send the text
+as the JSON object `{"error": "<text>"}` instead. When a
+failed result has no text, the Gemini, OpenAI and Ollama
+providers send `tool execution failed; no error message was
+provided` in its place. A successful result is sent
+unchanged.
+
 Tool results may also be sent in a user-role message, which
 is the Anthropic convention. The OpenAI provider converts
 each one to OpenAI's own tool-result form, in the original

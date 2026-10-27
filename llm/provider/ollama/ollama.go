@@ -25,6 +25,7 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/toolresult"
 )
 
 const (
@@ -269,7 +270,8 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) (ollamaChatR
 //   - BlockToolUse: serialised to JSON and concatenated into content,
 //     matching the format Ollama models emit when calling tools.
 //   - BlockToolResult: emitted as a role:"tool" message with the
-//     result text as content.
+//     result text as content, or {"error": "<text>"} when IsError is
+//     set, since Ollama's message has no field marking a failure.
 func (c *client) convertMessages(req llm.ChatRequest, useCompact bool) ([]ollamaMessage, error) {
 	var msgs []ollamaMessage
 
@@ -346,7 +348,7 @@ func convertMessage(m llm.Message) ([]ollamaMessage, error) {
 		case llm.BlockToolResult:
 			toolResults = append(toolResults, ollamaMessage{
 				Role:    "tool",
-				Content: b.Text,
+				Content: toolresult.Content(b.Text, b.IsError),
 			})
 		}
 	}

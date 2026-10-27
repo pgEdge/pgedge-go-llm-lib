@@ -21,6 +21,7 @@ import (
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/httpclient"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/redact"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/internal/toolresult"
 )
 
 const (
@@ -587,12 +588,6 @@ func convertMessage(m llm.Message, toolNames map[string]string) []geminiContent 
 	return []geminiContent{{Role: role, Parts: parts}}
 }
 
-// unspecifiedToolError is the placeholder used when a tool result is
-// flagged as an error but carries no text. An empty payload would be
-// indistinguishable from a successful call that returned nothing, so
-// something explicit is sent instead.
-const unspecifiedToolError = "tool execution failed; no error message was provided"
-
 // buildFunctionResponse converts a tool-result block into Gemini's
 // functionResponse part. The function name is recovered from the
 // toolNames map (populated from prior tool-use blocks); falling back
@@ -623,7 +618,7 @@ func buildFunctionResponse(b llm.ContentBlock, toolNames map[string]string) *gem
 	// "error" key, rather than being flattened back to a string.
 	var responseMap map[string]any
 	if b.IsError && b.Text == "" {
-		responseMap = map[string]any{key: unspecifiedToolError}
+		responseMap = map[string]any{key: toolresult.UnspecifiedError}
 	} else if err := json.Unmarshal([]byte(b.Text), &responseMap); err != nil {
 		responseMap = map[string]any{key: b.Text}
 	} else if b.IsError {
