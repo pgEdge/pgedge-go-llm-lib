@@ -42,7 +42,7 @@ func Content(text string, isError bool) string {
 	}
 
 	// HTML escaping is turned off so that an error such as "x < y"
-	// reaches the model as written rather than as "x < y".
+	// reaches the model as written rather than as "x \u003c y".
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
