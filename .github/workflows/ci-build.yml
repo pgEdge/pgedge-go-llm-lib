@@ -31,10 +31,10 @@ jobs:
         runs-on: ubuntu-latest
         strategy:
             matrix:
-                # 1.25.x is the minimum declared in go.mod, and is built here
+                # 1.26.10 is the minimum declared in go.mod, and is built here
                 # so that the floor is tested rather than merely advertised;
-                # 1.26.x is the current release.
-                go-version: ['1.25.x', '1.26.x']
+                # 1.27.3 is the current release.
+                go-version: ['1.26.10', '1.27.3']
             fail-fast: false
 
         steps:

@@ -11,6 +11,7 @@ project adheres to
 ## [Unreleased]
 
 ### Security
+- The minimum supported Go version is now 1.26.10, raised from 1.25.0, because earlier Go releases still trust eight compromised eMudhra intermediate CAs (CVE-2026-111943); 1.26.10 and 1.27.3 add them to the `crypto/x509` denylist, and older Go lines get no fix
 - Response bodies are now capped, and redirects refused, so a misbehaving or hostile endpoint can no longer exhaust the caller's memory or receive a request meant for the provider ([#47](https://github.com/pgEdge/pgedge-go-llm-lib/issues/47)). A response body, or a whole stream, longer than `Options.MaxResponseBytes` (256 MiB by default) fails with an error rather than being read in full; previously an endless response grew the heap until the request timeout fired. Redirects are no longer followed, because following a 307 or 308 resent the prompt to the redirect target, together with the Anthropic and Gemini API keys, which travel in custom headers that Go does not strip on a cross-host redirect
 
 ### Changed
