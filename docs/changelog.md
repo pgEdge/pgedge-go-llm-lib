@@ -8,7 +8,7 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-10-27
 
 ### Added
 - `ReasoningEffort` on `llm.ChatRequest`, with a client default on `llm.Options`, sets how much the model reasons before it answers, using one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` ([#54](https://github.com/pgEdge/pgedge-go-llm-lib/issues/54)). OpenAI sends it as `reasoning_effort` on Chat Completions and `reasoning.effort` on the Responses API, Anthropic as adaptive thinking with `output_config.effort` (which Claude Opus 4.7 and later and the Claude 5 models need in place of extended thinking with a budget), and Gemini as `thinkingConfig.thinkingLevel`; other providers leave it out. Unset, requests are unchanged, an unknown value fails with `ErrInvalidRequest` before sending on the providers that send the setting, and a level a model rejects is dropped, remembered and logged at Debug level, in the same way as a rejected temperature; OpenAI sends the nearest level towards `medium` in its place, once per call, and drops the effort for that call only, without remembering it, when a rejection that names it only in the message came with tools. Anthropic leaves out a temperature other than 1 alongside adaptive thinking, which it does not allow, and OpenAI remembers a rejected temperature only alongside the kind of reasoning effort it came with, so a temperature refused at `high` is still sent at `none`
