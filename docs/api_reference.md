@@ -112,6 +112,7 @@ type Options struct {
     Temperature   *float64
     ReasoningEffort ReasoningEffort
     PromptCaching PromptCaching
+    ExtraBody     map[string]any
     RequestTimeout time.Duration
     PerAttemptTimeout time.Duration
     MaxResponseBytes int64
@@ -131,6 +132,7 @@ type Options struct {
 | `Temperature`    | omitted     | Default sampling temperature. Unset means the field is left out of the upstream request, so the provider's own default applies; some newer models reject any temperature value. Use `llm.Float(t)`. |
 | `ReasoningEffort` | omitted    | Default reasoning effort; see [Reasoning effort](#reasoning-effort). |
 | `PromptCaching` | off         | Default automatic prompt caching; see [Prompt caching](#prompt-caching). |
+| `ExtraBody`     | —           | Fields the OpenAI provider adds to every chat request body; see [Extra body fields](#extra-body-fields). |
 | `RequestTimeout` | `120s`      | Wall-clock cap per request, spanning all retries. |
 | `PerAttemptTimeout` | `0` (off) | Wall-clock cap per attempt; makes slow attempts retryable. Set below `RequestTimeout`. |
 | `MaxResponseBytes` | `256 MiB` | Cap on a single response body, or a whole stream; a longer response fails with an error. |
@@ -404,6 +406,52 @@ returned.
 OpenAI and Gemini cache automatically, so `Auto` changes nothing
 there, and other providers ignore it. An unknown value fails with
 `ErrInvalidRequest` before sending on Anthropic.
+
+### Extra body fields
+
+The OpenAI provider adds the fields in `ExtraBody` to the JSON body
+of every `Chat` and `ChatStream` request, on `/v1/chat/completions`
+and `/v1/responses` alike, for fields the library does not model, such
+as an OpenAI-compatible gateway's own options:
+
+```go
+req := llm.ChatRequest{
+    Messages: msgs,
+    Extensions: []llm.ProviderExtension{openai.Extension{
+        ExtraBody: map[string]any{
+            "providerOptions": map[string]any{
+                "gateway": map[string]any{"caching": "auto"},
+            },
+        },
+    }},
+}
+```
+
+`llm.Options.ExtraBody` sets the client default, an `openai.Extension`
+on `Options.Extensions` is merged over it, and one on the request is
+merged over both, key by key. Each value is encoded with
+`encoding/json`, and a value that cannot be encoded fails with
+`ErrInvalidRequest` before sending. A `nil` value is sent as JSON
+`null` rather than removing the field. Other providers ignore
+`ExtraBody`.
+
+The fields are set at the top level after the library builds the
+body, so a key the library also sets is replaced whole by the extra
+value. This is deliberate, as an escape hatch, and it applies to the
+fields that `ReasoningEffort` produces too: an extra
+`reasoning_effort` replaces the level on `/v1/chat/completions`, and
+an extra `reasoning` replaces the whole `reasoning` object on
+`/v1/responses`, not only its `effort`. Since every field goes to
+whichever endpoint the request is routed to, pin the route with
+`openai.Extension{ResponsesAPI: ...}` before setting a field that only
+one endpoint accepts.
+
+An error whose `param`, or whose message when `param` is empty, names
+an extra field is returned to the caller without the client adjusting
+and resending the request, because the caller asked for that field.
+That includes a library field the extra value replaced, so a
+`reasoning_effort` set through `ExtraBody` is never dropped by the
+reasoning effort adjustment.
 
 ---
 

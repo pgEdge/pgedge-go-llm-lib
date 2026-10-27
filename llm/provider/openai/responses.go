@@ -358,15 +358,19 @@ func convertResponsesToolMessage(m llm.Message) []responsesInputItem {
 // chatResponses sends one request to /responses, without reasoning
 // effort if omitEffort is set. A non-2xx response is returned as a
 // rejection for Chat to classify.
-func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest, omitEffort bool) (*llm.ChatResponse, *rejection, error) {
+func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest, extra map[string]any, omitEffort bool) (*llm.ChatResponse, *rejection, error) {
 	if err := rejectResponsesUnsupported(req); err != nil {
 		return nil, nil, err
 	}
 	body := c.buildResponsesRequest(req, false, omitEffort)
+	wire, err := withExtraBody(body, extra)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var raw responsesResponse
 	status, respBody, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
-		c.baseURL+"/responses", c.headers(), body, &raw)
+		c.baseURL+"/responses", c.headers(), wire, &raw)
 	if err != nil && status == 0 {
 		return nil, nil, err
 	}
@@ -463,14 +467,18 @@ func responsesStopReason(raw *responsesResponse, sawToolCall bool) llm.StopReaso
 // without reasoning effort if omitEffort is set. A non-2xx response
 // arrives before the stream starts and is returned as a rejection for
 // ChatStream to classify.
-func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest, omitEffort bool) (*llm.Stream, *rejection, error) {
+func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest, extra map[string]any, omitEffort bool) (*llm.Stream, *rejection, error) {
 	if err := rejectResponsesUnsupported(req); err != nil {
 		return nil, nil, err
 	}
 	body := c.buildResponsesRequest(req, true, omitEffort)
+	wire, err := withExtraBody(body, extra)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
-		c.baseURL+"/responses", c.headers(), body)
+		c.baseURL+"/responses", c.headers(), wire)
 	if err != nil {
 		return nil, nil, err
 	}

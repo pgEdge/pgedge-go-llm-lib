@@ -354,7 +354,9 @@ func (c *client) logAdjustment(param, action string) {
 // most maxSends requests are made. send returns a rejection for a
 // non-2xx response and an error for anything else that failed;
 // omitEffort tells it to leave reasoning effort out of this call's
-// requests.
+// requests. A rejection that names one of the extra body fields is
+// returned as it is, since the caller asked for that field and the
+// client cannot know how to adjust it.
 //
 // A rejected reasoning effort level is replaced by its neighbour
 // towards medium once per call. If the neighbour is rejected as well,
@@ -362,13 +364,17 @@ func (c *client) logAdjustment(param, action string) {
 // only one level (GPT-5 Pro takes only "high") still gets a request it
 // accepts within maxSends; every rejected level is still remembered,
 // so later calls start nearer a level the model accepts.
-func sendWithAdjustments[T any](c *client, send func(responses, omitEffort bool) (T, *rejection, error)) (T, error) {
+func sendWithAdjustments[T any](c *client, extra map[string]any, send func(responses, omitEffort bool) (T, *rejection, error)) (T, error) {
 	applied := map[string]bool{}
 	omitEffort, stepped := false, false
 	for sends := 1; ; sends++ {
 		out, rej, err := send(c.useResponsesAPI(), omitEffort)
 		if rej == nil {
 			return out, err
+		}
+		if namesExtraField(rej.body, extra) {
+			var zero T
+			return zero, c.mapError(rej.status, rej.body)
 		}
 		param, action := c.classify(rej)
 		key := param + "/" + action

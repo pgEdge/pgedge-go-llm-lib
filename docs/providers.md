@@ -115,6 +115,11 @@ Override the routing with
 sequences, so requests that set `ChatRequest.StopSequences`
 return `llm.ErrNotSupported` when routed there.
 
+Fields the library does not model can be added to the request
+body with `openai.Extension{ExtraBody: ...}` on a request or on
+`Options.Extensions`, or with `Options.ExtraBody`; see
+[Extra body fields](api_reference.md#extra-body-fields).
+
 The `ListModels` method filters out non-chat models. The
 filter removes models with the following name prefixes:
 `text-embedding`, `embedding`, `tts`, `whisper`, `dall-e`,
