@@ -267,9 +267,11 @@ func TestDisabledThinkingRejected(t *testing.T) {
 
 func TestEffortRejectionsChained(t *testing.T) {
 	// Temperature, thinking and effort refused in turn take four sends.
+	// The temperature is 1, the only value Anthropic allows alongside
+	// thinking, so it is sent with adaptive thinking.
 	effortModes(t, func(t *testing.T, stream bool) {
 		srv, requests := effortServer(t, temperatureDeprecatedBody, adaptiveRejected, effortRejected)
-		c := newEffortClient(t, srv.URL, llm.Options{Temperature: llm.Float(0.7)})
+		c := newEffortClient(t, srv.URL, llm.Options{Temperature: llm.Float(1)})
 		if err := sendEffort(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortMax}); err != nil {
 			t.Fatalf("call: %v", err)
 		}
@@ -305,7 +307,8 @@ func TestExtendedThinkingRejectionNotRetried(t *testing.T) {
 func TestTemperatureRejectionWithAdaptiveThinking(t *testing.T) {
 	// With thinking from ReasoningEffort, a temperature rejection that
 	// does not mention thinking is the model's, so it is remembered;
-	// one that does is dropped for that call only.
+	// one that does is dropped for that call only. The temperature is
+	// 1, since any other value is left out alongside adaptive thinking.
 	for _, tc := range []struct {
 		name       string
 		body       string
@@ -317,7 +320,7 @@ func TestTemperatureRejectionWithAdaptiveThinking(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, requests := effortServer(t, tc.body)
 			c := newEffortClient(t, srv.URL, llm.Options{
-				Temperature:     llm.Float(0.7),
+				Temperature:     llm.Float(1),
 				ReasoningEffort: llm.ReasoningEffortHigh,
 			})
 			for i := 0; i < 2; i++ {
@@ -332,6 +335,41 @@ func TestTemperatureRejectionWithAdaptiveThinking(t *testing.T) {
 			if _, sent := got[2]["temperature"]; sent == tc.remembered {
 				t.Errorf("second call temperature sent = %v, want %v", sent, !tc.remembered)
 			}
+		})
+	}
+}
+
+func TestTemperatureOmittedWithAdaptiveThinking(t *testing.T) {
+	// Anthropic allows no temperature other than 1 alongside thinking,
+	// so one is left out of requests that carry adaptive thinking, and
+	// sent as before otherwise.
+	for _, tc := range []struct {
+		name string
+		temp float64
+		req  llm.ChatRequest
+		sent bool
+	}{
+		{"adaptive", 0.7, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortHigh}, false},
+		{"adaptive at 1", 1, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortHigh}, true},
+		{"disabled", 0.7, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortNone}, true},
+		{"no effort", 0.7, llm.ChatRequest{}, true},
+		{"extended thinking", 0.7, WithExtendedThinking(llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortHigh}, 8000), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			effortModes(t, func(t *testing.T, stream bool) {
+				srv, requests := effortServer(t)
+				c := newEffortClient(t, srv.URL, llm.Options{Temperature: llm.Float(tc.temp)})
+				if err := sendEffort(t, c, stream, tc.req); err != nil {
+					t.Fatalf("call: %v", err)
+				}
+				got := requests()
+				if len(got) != 1 {
+					t.Fatalf("requests = %d, want 1", len(got))
+				}
+				if _, sent := got[0]["temperature"]; sent != tc.sent {
+					t.Errorf("temperature sent = %v, want %v: %v", sent, tc.sent, got[0])
+				}
+			})
 		})
 	}
 }

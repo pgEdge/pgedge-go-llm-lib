@@ -256,21 +256,22 @@ func (c *client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	if err := c.checkReasoningEffort(req); err != nil {
 		return nil, err
 	}
-	return sendWithAdjustments(c, func(responses bool) (*llm.ChatResponse, *rejection, error) {
+	return sendWithAdjustments(c, func(responses, omitEffort bool) (*llm.ChatResponse, *rejection, error) {
 		if responses {
-			return c.chatResponses(ctx, req)
+			return c.chatResponses(ctx, req, omitEffort)
 		}
-		return c.chatCompletions(ctx, req)
+		return c.chatCompletions(ctx, req, omitEffort)
 	})
 }
 
-// chatCompletions sends one request to /chat/completions. A non-2xx
-// response is returned as a rejection for Chat to classify.
-func (c *client) chatCompletions(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, *rejection, error) {
+// chatCompletions sends one request to /chat/completions, without
+// reasoning effort if omitEffort is set. A non-2xx response is returned
+// as a rejection for Chat to classify.
+func (c *client) chatCompletions(ctx context.Context, req llm.ChatRequest, omitEffort bool) (*llm.ChatResponse, *rejection, error) {
 	if err := rejectDocumentBlocks(req); err != nil {
 		return nil, nil, err
 	}
-	oaiReq := c.buildChatRequest(req, false)
+	oaiReq := c.buildChatRequest(req, false, omitEffort)
 
 	var oaiResp openaiChatResponse
 	status, body, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
@@ -297,11 +298,12 @@ func (r openaiChatRequest) rejection(status int, body []byte) *rejection {
 		body:        body,
 		maxTokens:   r.MaxTokens != nil,
 		temperature: r.Temperature != nil,
+		tools:       len(r.Tools) > 0,
 		effort:      r.ReasoningEffort,
 	}
 }
 
-func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRequest {
+func (c *client) buildChatRequest(req llm.ChatRequest, stream, omitEffort bool) openaiChatRequest {
 	adjust := c.learnedFlags()
 	oaiReq := openaiChatRequest{
 		Model:    c.model,
@@ -328,20 +330,22 @@ func (c *client) buildChatRequest(req llm.ChatRequest, stream bool) openaiChatRe
 		}
 	}
 
+	// Reasoning effort: per-request → client default → omit, with a
+	// level the model has rejected replaced or omitted (see
+	// reasoningEffort). OpenAI accepts every llm.ReasoningEffort value
+	// by name.
+	oaiReq.ReasoningEffort = c.reasoningEffort(req, omitEffort)
+
 	// Temperature: per-request → client default → omit (use provider
-	// default), and always omitted once the model has rejected it.
-	if adjust.dropTemperature {
+	// default), and omitted once the model has rejected it alongside
+	// this kind of reasoning effort.
+	if c.omitTemperature(oaiReq.ReasoningEffort) {
 		oaiReq.Temperature = nil
 	} else if req.Temperature != nil {
 		oaiReq.Temperature = req.Temperature
 	} else {
 		oaiReq.Temperature = c.opts.Temperature
 	}
-
-	// Reasoning effort: per-request → client default → omit, and
-	// omitted once the model has rejected the level. OpenAI accepts
-	// every llm.ReasoningEffort value by name.
-	oaiReq.ReasoningEffort = c.reasoningEffort(req)
 
 	// Tools.
 	if len(req.Tools) > 0 {
@@ -673,22 +677,23 @@ func (c *client) ChatStream(ctx context.Context, req llm.ChatRequest) (*llm.Stre
 	if err := c.checkReasoningEffort(req); err != nil {
 		return nil, err
 	}
-	return sendWithAdjustments(c, func(responses bool) (*llm.Stream, *rejection, error) {
+	return sendWithAdjustments(c, func(responses, omitEffort bool) (*llm.Stream, *rejection, error) {
 		if responses {
-			return c.chatStreamResponses(ctx, req)
+			return c.chatStreamResponses(ctx, req, omitEffort)
 		}
-		return c.chatStreamCompletions(ctx, req)
+		return c.chatStreamCompletions(ctx, req, omitEffort)
 	})
 }
 
 // chatStreamCompletions sends one streaming request to
-// /chat/completions. A non-2xx response arrives before the stream
-// starts and is returned as a rejection for ChatStream to classify.
-func (c *client) chatStreamCompletions(ctx context.Context, req llm.ChatRequest) (*llm.Stream, *rejection, error) {
+// /chat/completions, without reasoning effort if omitEffort is set. A
+// non-2xx response arrives before the stream starts and is returned as
+// a rejection for ChatStream to classify.
+func (c *client) chatStreamCompletions(ctx context.Context, req llm.ChatRequest, omitEffort bool) (*llm.Stream, *rejection, error) {
 	if err := rejectDocumentBlocks(req); err != nil {
 		return nil, nil, err
 	}
-	oaiReq := c.buildChatRequest(req, true)
+	oaiReq := c.buildChatRequest(req, true, omitEffort)
 
 	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/chat/completions", c.headers(), oaiReq)

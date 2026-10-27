@@ -91,7 +91,21 @@ var effortLevels = map[llm.ReasoningEffort]string{
 // thinking {type: "adaptive"} with output_config {effort}; None sends
 // thinking {type: "disabled"}. Thinking already set by the Extension is
 // left alone, and anything the model has rejected is omitted.
+//
+// Anthropic documents thinking as incompatible with any temperature
+// other than 1, so a request that carries adaptive thinking leaves out
+// any other temperature rather than being sent only to be rejected.
 func (c *client) applyReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRequest) {
+	c.setReasoningEffort(aReq, req)
+	if aReq.Thinking != nil && aReq.Thinking.Type == "adaptive" &&
+		aReq.Temperature != nil && *aReq.Temperature != 1 {
+		aReq.Temperature = nil
+	}
+}
+
+// setReasoningEffort does the work of applyReasoningEffort apart from
+// the temperature.
+func (c *client) setReasoningEffort(aReq *anthropicChatRequest, req llm.ChatRequest) {
 	effort, err := req.EffectiveReasoningEffort(c.opts.ReasoningEffort)
 	if err != nil || effort == llm.ReasoningEffortDefault {
 		return

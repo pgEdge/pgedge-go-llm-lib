@@ -151,7 +151,7 @@ type responsesStreamEvent struct {
 // buildResponsesRequest translates an llm.ChatRequest into the
 // /v1/responses wire shape. StopSequences are rejected upstream because
 // the Responses API has no equivalent parameter.
-func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) responsesRequest {
+func (c *client) buildResponsesRequest(req llm.ChatRequest, stream, omitEffort bool) responsesRequest {
 	out := responsesRequest{
 		Model:        c.model,
 		Instructions: req.SystemPrompt,
@@ -167,20 +167,22 @@ func (c *client) buildResponsesRequest(req llm.ChatRequest, stream bool) respons
 		out.MaxOutputTokens = c.opts.MaxTokens
 	}
 
-	// Temperature: per-request → client default → omit, and always
-	// omitted once the model has rejected it.
-	if c.learnedFlags().dropTemperature {
+	// Reasoning effort: as for /chat/completions, sent as
+	// reasoning.effort.
+	effort := c.reasoningEffort(req, omitEffort)
+	if effort != llm.ReasoningEffortDefault {
+		out.Reasoning = &responsesReasoning{Effort: effort}
+	}
+
+	// Temperature: per-request → client default → omit, and omitted
+	// once the model has rejected it alongside this kind of reasoning
+	// effort.
+	if c.omitTemperature(effort) {
 		out.Temperature = nil
 	} else if req.Temperature != nil {
 		out.Temperature = req.Temperature
 	} else {
 		out.Temperature = c.opts.Temperature
-	}
-
-	// Reasoning effort: as for /chat/completions, sent as
-	// reasoning.effort.
-	if effort := c.reasoningEffort(req); effort != llm.ReasoningEffortDefault {
-		out.Reasoning = &responsesReasoning{Effort: effort}
 	}
 
 	if len(req.Tools) > 0 {
@@ -353,13 +355,14 @@ func convertResponsesToolMessage(m llm.Message) []responsesInputItem {
 
 // ---------- Chat (non-streaming) ----------
 
-// chatResponses sends one request to /responses. A non-2xx response
-// is returned as a rejection for Chat to classify.
-func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, *rejection, error) {
+// chatResponses sends one request to /responses, without reasoning
+// effort if omitEffort is set. A non-2xx response is returned as a
+// rejection for Chat to classify.
+func (c *client) chatResponses(ctx context.Context, req llm.ChatRequest, omitEffort bool) (*llm.ChatResponse, *rejection, error) {
 	if err := rejectResponsesUnsupported(req); err != nil {
 		return nil, nil, err
 	}
-	body := c.buildResponsesRequest(req, false)
+	body := c.buildResponsesRequest(req, false, omitEffort)
 
 	var raw responsesResponse
 	status, respBody, err := httpclient.DoJSON(ctx, c.httpClient, http.MethodPost,
@@ -386,6 +389,7 @@ func (r responsesRequest) rejection(status int, body []byte) *rejection {
 		body:        body,
 		responses:   true,
 		temperature: r.Temperature != nil,
+		tools:       len(r.Tools) > 0,
 		effort:      r.effort(),
 	}
 }
@@ -455,14 +459,15 @@ func responsesStopReason(raw *responsesResponse, sawToolCall bool) llm.StopReaso
 
 // ---------- ChatStream ----------
 
-// chatStreamResponses sends one streaming request to /responses. A
-// non-2xx response arrives before the stream starts and is returned as
-// a rejection for ChatStream to classify.
-func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest) (*llm.Stream, *rejection, error) {
+// chatStreamResponses sends one streaming request to /responses,
+// without reasoning effort if omitEffort is set. A non-2xx response
+// arrives before the stream starts and is returned as a rejection for
+// ChatStream to classify.
+func (c *client) chatStreamResponses(ctx context.Context, req llm.ChatRequest, omitEffort bool) (*llm.Stream, *rejection, error) {
 	if err := rejectResponsesUnsupported(req); err != nil {
 		return nil, nil, err
 	}
-	body := c.buildResponsesRequest(req, true)
+	body := c.buildResponsesRequest(req, true, omitEffort)
 
 	resp, err := httpclient.DoSSERequest(ctx, c.httpClient, http.MethodPost,
 		c.baseURL+"/responses", c.headers(), body)

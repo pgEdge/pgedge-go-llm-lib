@@ -383,8 +383,9 @@ func TestAdapt_StopsAfterFourSends(t *testing.T) {
 		if len(got) != 5 {
 			t.Fatalf("requests = %d, want 5", len(got))
 		}
-		if got[4].path != "/responses" || got[4].has("temperature") || got[4].has("reasoning") {
-			t.Errorf("follow-up call should go to /responses without temperature or reasoning: %s %v", got[4].path, got[4].body)
+		reasoning, _ := got[4].body["reasoning"].(map[string]any)
+		if got[4].path != "/responses" || got[4].has("temperature") || reasoning["effort"] != "low" {
+			t.Errorf("follow-up call should go to /responses without temperature, at low: %s %v", got[4].path, got[4].body)
 		}
 	})
 }
@@ -510,8 +511,8 @@ func TestAdapt_LogsMaxTokensAdjustment(t *testing.T) {
 }
 
 func TestAdapt_ReasoningEffortLevelRejected(t *testing.T) {
-	// A refused level is omitted from then on, but other levels are
-	// still sent.
+	// A refused level is replaced by the next one towards medium from
+	// then on, and other levels are still sent.
 	modes(t, func(t *testing.T, stream bool) {
 		srv, requests := adaptServer(t, scriptedReply{400, effortValueRejected})
 		c := newAdaptClient(t, srv.URL, nil)
@@ -529,8 +530,8 @@ func TestAdapt_ReasoningEffortLevelRejected(t *testing.T) {
 		if got[0].body["reasoning_effort"] != "minimal" {
 			t.Errorf("first request should carry minimal: %v", got[0].body)
 		}
-		if got[1].has("reasoning_effort") || got[2].has("reasoning_effort") {
-			t.Errorf("minimal should be omitted after the rejection: %v, %v", got[1].body, got[2].body)
+		if got[1].body["reasoning_effort"] != "low" || got[2].body["reasoning_effort"] != "low" {
+			t.Errorf("minimal should be sent as low after the rejection: %v, %v", got[1].body, got[2].body)
 		}
 		if got[3].body["reasoning_effort"] != "low" {
 			t.Errorf("low should still be sent: %v", got[3].body)
@@ -575,9 +576,10 @@ func TestAdapt_ReasoningEffortRejectedOnResponses(t *testing.T) {
 		if len(got) != 2 {
 			t.Fatalf("requests = %d, want 2", len(got))
 		}
-		reasoning, _ := got[0].body["reasoning"].(map[string]any)
-		if reasoning["effort"] != "minimal" || got[1].has("reasoning") {
-			t.Errorf("reasoning should be sent, then omitted: %v, %v", got[0].body, got[1].body)
+		first, _ := got[0].body["reasoning"].(map[string]any)
+		retry, _ := got[1].body["reasoning"].(map[string]any)
+		if first["effort"] != "minimal" || retry["effort"] != "low" {
+			t.Errorf("reasoning should be sent as minimal, then low: %v, %v", got[0].body, got[1].body)
 		}
 	})
 }
@@ -656,6 +658,125 @@ func TestReasoningEffortUnknownRejectedBeforeSending(t *testing.T) {
 		}
 		if got := requests(); len(got) != 0 {
 			t.Errorf("requests = %d, want 0", len(got))
+		}
+	})
+}
+
+func TestTowardsMedium(t *testing.T) {
+	want := map[llm.ReasoningEffort]llm.ReasoningEffort{
+		llm.ReasoningEffortNone:    llm.ReasoningEffortMinimal,
+		llm.ReasoningEffortMinimal: llm.ReasoningEffortLow,
+		llm.ReasoningEffortLow:     llm.ReasoningEffortMedium,
+		llm.ReasoningEffortMedium:  llm.ReasoningEffortDefault,
+		llm.ReasoningEffortHigh:    llm.ReasoningEffortMedium,
+		llm.ReasoningEffortXHigh:   llm.ReasoningEffortHigh,
+		llm.ReasoningEffortMax:     llm.ReasoningEffortXHigh,
+		llm.ReasoningEffortDefault: llm.ReasoningEffortDefault,
+	}
+	for in, out := range want {
+		if got := towardsMedium(in); got != out {
+			t.Errorf("towardsMedium(%q) = %q, want %q", in, got, out)
+		}
+	}
+}
+
+// effortLevelRejected returns an unsupported_value rejection of level,
+// in the shape of effortValueRejected.
+func effortLevelRejected(level string) string {
+	return strings.Replace(effortValueRejected, "'minimal'", "'"+level+"'", 1)
+}
+
+func TestAdapt_ReasoningEffortStepsTowardsMedium(t *testing.T) {
+	// Successive rejections step a low level up and a high level down,
+	// one level per send, and a rejected medium is omitted.
+	for _, tc := range []struct {
+		name    string
+		start   llm.ReasoningEffort
+		replies []string
+		want    []any // reasoning_effort per request, nil for omitted
+	}{
+		{"up", llm.ReasoningEffortNone, []string{"none", "minimal"}, []any{"none", "minimal", "low"}},
+		{"down", llm.ReasoningEffortMax, []string{"max"}, []any{"max", "xhigh"}},
+		{"medium", llm.ReasoningEffortMedium, []string{"medium"}, []any{"medium", nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			modes(t, func(t *testing.T, stream bool) {
+				var replies []scriptedReply
+				for _, level := range tc.replies {
+					replies = append(replies, scriptedReply{400, effortLevelRejected(level)})
+				}
+				srv, requests := adaptServer(t, replies...)
+				c := newAdaptClient(t, srv.URL, nil)
+				if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: tc.start}); err != nil {
+					t.Fatalf("call: %v", err)
+				}
+				got := requests()
+				if len(got) != len(tc.want) {
+					t.Fatalf("requests = %d, want %d", len(got), len(tc.want))
+				}
+				for i, w := range tc.want {
+					if got[i].body["reasoning_effort"] != w {
+						t.Errorf("request %d reasoning_effort = %v, want %v", i, got[i].body["reasoning_effort"], w)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestAdapt_TemperatureRejectedAtReasoningEffort(t *testing.T) {
+	// OpenAI's reasoning models refuse temperature at every effort but
+	// none, so a rejection alongside one level is remembered for the
+	// levels above none only, and temperature is still sent at none or
+	// with no effort.
+	modes(t, func(t *testing.T, stream bool) {
+		srv, requests := adaptServer(t, scriptedReply{400, temperatureValueRejected})
+		c := newAdaptClient(t, srv.URL, nil)
+
+		for _, e := range []llm.ReasoningEffort{
+			llm.ReasoningEffortHigh,
+			llm.ReasoningEffortNone,
+			llm.ReasoningEffortDefault,
+			llm.ReasoningEffortLow,
+		} {
+			if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: e}); err != nil {
+				t.Fatalf("call at %q: %v", e, err)
+			}
+		}
+		got := requests()
+		if len(got) != 5 {
+			t.Fatalf("requests = %d, want 5", len(got))
+		}
+		for i, want := range []bool{true, false, true, true, false} {
+			if got[i].has("temperature") != want {
+				t.Errorf("request %d temperature sent = %v, want %v: %v", i, !want, want, got[i].body)
+			}
+		}
+	})
+}
+
+func TestAdapt_MessageOnlyEffortRejectionWithTools(t *testing.T) {
+	// A rejection naming reasoning_effort only in its message, of a
+	// request that carried tools, may be about the combination, so the
+	// effort is omitted for that call only.
+	modes(t, func(t *testing.T, stream bool) {
+		srv, requests := adaptServer(t, scriptedReply{400, effortParamRejected})
+		c := newAdaptClient(t, srv.URL, nil)
+		tools := []llm.Tool{{Name: "get_weather", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+
+		if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortHigh, Tools: tools}); err != nil {
+			t.Fatalf("call with tools: %v", err)
+		}
+		if _, err := call(t, c, stream, llm.ChatRequest{ReasoningEffort: llm.ReasoningEffortHigh}); err != nil {
+			t.Fatalf("call without tools: %v", err)
+		}
+		got := requests()
+		if len(got) != 3 {
+			t.Fatalf("requests = %d, want 3", len(got))
+		}
+		if got[0].body["reasoning_effort"] != "high" || got[1].has("reasoning_effort") || got[2].body["reasoning_effort"] != "high" {
+			t.Errorf("reasoning_effort should be sent, omitted on the retry, then sent again: %v, %v, %v",
+				got[0].body, got[1].body, got[2].body)
 		}
 	})
 }

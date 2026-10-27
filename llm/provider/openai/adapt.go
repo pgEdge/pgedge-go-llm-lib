@@ -38,16 +38,30 @@ const (
 	adjustEffort      = "reasoning_effort"
 )
 
-// actionEffortAll is the logged action when the model refuses the
-// reasoning effort parameter itself rather than one level.
-const actionEffortAll = "omitted at every level"
+// Logged actions for reasoning effort rejections. actionEffortAll is
+// for a model that refuses the parameter itself rather than one level;
+// actionEffortThisCall is for a rejection that may be down to the tools
+// the request carried (see classify).
+const (
+	actionEffortAll      = "omitted at every level"
+	actionEffortThisCall = "omitted for this request"
+)
 
 // learned records the adjustments the client has made after OpenAI
 // rejected a request.
 type learned struct {
 	maxCompletionTokens bool // send max_completion_tokens, not max_tokens
-	dropTemperature     bool // omit temperature
 	responsesAPI        bool // route Chat / ChatStream to /v1/responses
+
+	// Temperature is omitted once the model has rejected it, but only
+	// alongside the kind of reasoning effort the rejected request
+	// carried: OpenAI's reasoning models accept temperature at effort
+	// "none" and refuse it at every other level, so a rejection at
+	// "high" says nothing about requests at "none". See
+	// temperatureFlag.
+	dropTemperature          bool // with no reasoning effort sent
+	dropTemperatureNone      bool // with reasoning effort "none"
+	dropTemperatureReasoning bool // with any other reasoning effort
 
 	// rejectedEffort holds the reasoning effort levels the model has
 	// refused, which are then omitted; effortUnsupported records that
@@ -65,8 +79,42 @@ type rejection struct {
 	responses   bool // sent to /v1/responses
 	maxTokens   bool // carried max_tokens
 	temperature bool // carried temperature
+	tools       bool // carried tool definitions
 
 	effort llm.ReasoningEffort // reasoning effort carried, if any
+}
+
+// temperatureFlag returns the learned flag that records a temperature
+// rejection alongside the given reasoning effort. The caller must hold
+// learnedMu.
+func (l *learned) temperatureFlag(effort llm.ReasoningEffort) *bool {
+	switch effort {
+	case llm.ReasoningEffortDefault:
+		return &l.dropTemperature
+	case llm.ReasoningEffortNone:
+		return &l.dropTemperatureNone
+	}
+	return &l.dropTemperatureReasoning
+}
+
+// omitTemperature reports whether the model has rejected temperature
+// alongside the given reasoning effort, so it is left out.
+func (c *client) omitTemperature(effort llm.ReasoningEffort) bool {
+	c.learnedMu.Lock()
+	defer c.learnedMu.Unlock()
+	return *c.learned.temperatureFlag(effort)
+}
+
+// temperatureAction returns the logged action for a temperature
+// rejection alongside the given reasoning effort.
+func temperatureAction(effort llm.ReasoningEffort) string {
+	switch effort {
+	case llm.ReasoningEffortDefault:
+		return "omitted"
+	case llm.ReasoningEffortNone:
+		return "omitted at reasoning effort none"
+	}
+	return "omitted at reasoning effort above none"
 }
 
 func (c *client) learnedFlags() learned {
@@ -87,20 +135,58 @@ func (c *client) checkReasoningEffort(req llm.ChatRequest) error {
 	return err
 }
 
+// effortOrder lists the reasoning effort levels from lowest to highest.
+var effortOrder = []llm.ReasoningEffort{
+	llm.ReasoningEffortNone,
+	llm.ReasoningEffortMinimal,
+	llm.ReasoningEffortLow,
+	llm.ReasoningEffortMedium,
+	llm.ReasoningEffortHigh,
+	llm.ReasoningEffortXHigh,
+	llm.ReasoningEffortMax,
+}
+
+// towardsMedium returns the level next to effort in the direction of
+// medium, or the zero value for medium itself. A rejected level is
+// replaced by its nearest neighbour this way rather than omitted, since
+// omitting it applies the model's default, which for OpenAI's reasoning
+// models is medium or higher and so further from what the caller asked
+// for than any neighbour.
+func towardsMedium(effort llm.ReasoningEffort) llm.ReasoningEffort {
+	const medium = 3 // index of llm.ReasoningEffortMedium in effortOrder
+	for i, e := range effortOrder {
+		if e != effort {
+			continue
+		}
+		switch {
+		case i < medium:
+			return effortOrder[i+1]
+		case i > medium:
+			return effortOrder[i-1]
+		}
+	}
+	return llm.ReasoningEffortDefault
+}
+
 // reasoningEffort returns the reasoning effort to send for req: the
-// request's level, else the client default, or the zero value when
-// neither is set or the model has rejected that level. Requests are
-// checked by checkReasoningEffort first, so an unknown level never
-// reaches here.
-func (c *client) reasoningEffort(req llm.ChatRequest) llm.ReasoningEffort {
+// request's level, else the client default. A level the model has
+// rejected is replaced by the nearest one towards medium that it has
+// not (see towardsMedium), and the zero value is returned when neither
+// is set, when omit is true, or when the model refuses the parameter
+// or every level from there to medium. Requests are checked by
+// checkReasoningEffort first, so an unknown level never reaches here.
+func (c *client) reasoningEffort(req llm.ChatRequest, omit bool) llm.ReasoningEffort {
 	effort, err := req.EffectiveReasoningEffort(c.opts.ReasoningEffort)
-	if err != nil || effort == llm.ReasoningEffortDefault {
+	if omit || err != nil || effort == llm.ReasoningEffortDefault {
 		return llm.ReasoningEffortDefault
 	}
 	c.learnedMu.Lock()
 	defer c.learnedMu.Unlock()
-	if c.learned.effortUnsupported || c.learned.rejectedEffort[effort] {
+	if c.learned.effortUnsupported {
 		return llm.ReasoningEffortDefault
+	}
+	for effort != llm.ReasoningEffortDefault && c.learned.rejectedEffort[effort] {
+		effort = towardsMedium(effort)
 	}
 	return effort
 }
@@ -137,8 +223,15 @@ func (c *client) classify(rej *rejection) (param, action string) {
 	case rejectsMaxTokens(rej, e.Param, e.Code):
 		return adjustMaxTokens, "sent as max_completion_tokens"
 	case rejectsTemperature(rej, e.Param, e.Code):
-		return adjustTemperature, "omitted"
+		return adjustTemperature, temperatureAction(rej.effort)
 	case rejectsReasoningEffort(rej, e.Param, e.Message):
+		// Some models accept tools on Chat Completions only at effort
+		// "none", and a rejection naming reasoning_effort only in its
+		// message may be about that combination rather than the level,
+		// so it is not remembered for requests without tools.
+		if e.Param == "" && rej.tools {
+			return adjustEffort, actionEffortThisCall
+		}
 		if e.Code == "unsupported_value" {
 			return adjustEffort, "omitted " + string(rej.effort)
 		}
@@ -209,7 +302,7 @@ func (c *client) learn(param, action string, rej *rejection) {
 	case adjustMaxTokens:
 		flag = &c.learned.maxCompletionTokens
 	case adjustTemperature:
-		flag = &c.learned.dropTemperature
+		flag = c.learned.temperatureFlag(rej.effort)
 	case adjustEndpoint:
 		flag = &c.learned.responsesAPI
 	}
@@ -257,25 +350,36 @@ func (c *client) logAdjustment(param, action string) {
 
 // sendWithAdjustments calls send, routed as the client currently
 // decides, and retries after each rejection that an adjustment can
-// resolve. Each adjustment is applied at most once per call, and at
-// most maxSends requests are made. send returns a rejection for a
-// non-2xx response and an error for anything else that failed.
-func sendWithAdjustments[T any](c *client, send func(responses bool) (T, *rejection, error)) (T, error) {
+// resolve. Each adjustment is applied at most once per call (a
+// rejected reasoning effort level counts separately for each level, so
+// a call can step through neighbouring levels), and at most maxSends
+// requests are made. send returns a rejection for a non-2xx response
+// and an error for anything else that failed; omitEffort tells it to
+// leave reasoning effort out of this call's requests.
+func sendWithAdjustments[T any](c *client, send func(responses, omitEffort bool) (T, *rejection, error)) (T, error) {
 	applied := map[string]bool{}
+	omitEffort := false
 	for sends := 1; ; sends++ {
-		out, rej, err := send(c.useResponsesAPI())
+		out, rej, err := send(c.useResponsesAPI(), omitEffort)
 		if rej == nil {
 			return out, err
 		}
 		param, action := c.classify(rej)
-		if param == "" || applied[param] {
+		key := param + "/" + action
+		if param == "" || applied[key] {
 			var zero T
 			return zero, c.mapError(rej.status, rej.body)
 		}
-		// Learn even from the final send, so the next call is built
-		// correctly rather than hitting the same rejection first.
-		applied[param] = true
-		c.learn(param, action, rej)
+		applied[key] = true
+		if action == actionEffortThisCall {
+			omitEffort = true
+			c.logAdjustment(param, action)
+		} else {
+			// Learn even from the final send, so the next call is
+			// built correctly rather than hitting the same rejection
+			// first.
+			c.learn(param, action, rej)
+		}
 		if sends == maxSends {
 			var zero T
 			return zero, c.mapError(rej.status, rej.body)

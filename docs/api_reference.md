@@ -353,9 +353,20 @@ without it, remember the rejection for the rest of the client's life,
 and log the adjustment to `Options.Logger` at Debug level. Anthropic
 drops the adaptive or disabled thinking setting and the effort level
 separately, so a model that accepts an effort but not adaptive
-thinking still gets the effort; on OpenAI, a model that rejects the
-parameter itself, rather than one level, has it omitted at every
-level.
+thinking still gets the effort. On OpenAI, a rejected level is
+replaced by the nearest level towards `medium` that the model has
+not rejected (so `none` becomes `minimal`, and `max` becomes
+`xhigh`), since omitting it would apply the model's default, which
+is usually further from the level asked for; a rejected `medium` is
+omitted, and a model that rejects the parameter itself, rather than
+one level, has it omitted at every level. An OpenAI rejection that
+names the effort only in its message, of a request that carried
+tools, may be about tools and effort together, so the effort is
+omitted for that call only.
+
+Anthropic does not allow a temperature other than 1 alongside
+thinking, so a request that carries adaptive thinking leaves any
+other temperature out.
 
 ---
 

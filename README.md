@@ -110,13 +110,19 @@ temperature at all; an explicitly-set `0` is preserved and sent as
 `temperature: 0`. A temperature that a model rejects is dropped: the
 Anthropic and OpenAI providers resend the request without it, remember
 that for the rest of the client's life, and log the adjustment to
-`Options.Logger` at Debug level.
+`Options.Logger` at Debug level. On OpenAI the rejection is remembered only
+alongside the kind of reasoning effort it came with, since OpenAI's reasoning
+models accept a temperature at effort `none` and refuse it at every other
+level. Anthropic does not allow a temperature other than 1 alongside thinking,
+so a request that carries adaptive thinking from `ReasoningEffort` leaves any
+other temperature out.
 
 `ReasoningEffort` is translated for each provider: `reasoning_effort` (or
 `reasoning.effort` on `/v1/responses`) on OpenAI, adaptive thinking with
 `output_config.effort` on Anthropic, and `thinkingConfig.thinkingLevel` on
 Gemini; other providers leave it out. A level a model rejects is dropped and
-remembered in the same way as a rejected temperature. See the
+remembered in the same way as a rejected temperature; on OpenAI, the nearest
+level towards `medium` is sent in its place. See the
 [API reference](docs/api_reference.md#reasoning-effort) for how each level maps.
 
 ### Retry
