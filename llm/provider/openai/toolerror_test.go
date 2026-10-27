@@ -12,6 +12,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -108,60 +109,72 @@ func TestToolResultIsErrorSent(t *testing.T) {
 	for _, responses := range []bool{false, true} {
 		for _, stream := range []bool{false, true} {
 			for _, role := range []llm.Role{llm.RoleTool, llm.RoleUser} {
-				name := "chat_completions"
-				if responses {
-					name = "responses"
-				}
-				if stream {
-					name += "/stream"
-				} else {
-					name += "/chat"
-				}
-				name += "/" + string(role)
+				name := fmt.Sprintf("responses=%v/stream=%v/%s", responses, stream, role)
 				t.Run(name, func(t *testing.T) {
 					var captured map[string]any
 					srv := toolErrorServer(t, &captured)
 					defer srv.Close()
 
-					opts := llm.Options{
-						APIKey:  "test-key",
-						Model:   "gpt-4o",
-						BaseURL: srv.URL,
-						Retry:   llm.RetryConfig{Disabled: true},
-					}
-					if responses {
-						opts.Extensions = forceResponses
-					}
-					c, err := New(opts)
-					if err != nil {
-						t.Fatalf("create client: %v", err)
-					}
-					req := llm.ChatRequest{Messages: toolErrorMessages(role)}
-					if stream {
-						s, err := c.ChatStream(context.Background(), req)
-						if err != nil {
-							t.Fatalf("ChatStream: %v", err)
-						}
-						for range s.Chunks {
-						}
-						if err := <-s.Err; err != nil {
-							t.Fatalf("stream error: %v", err)
-						}
-					} else if _, err := c.Chat(context.Background(), req); err != nil {
-						t.Fatalf("Chat: %v", err)
-					}
-
-					got := sentToolResults(t, captured, responses)
-					if len(got) != len(toolErrorResults) {
-						t.Fatalf("sent %d tool results, want %d: %v", len(got), len(toolErrorResults), got)
-					}
-					for _, r := range toolErrorResults {
-						if got[r.block.ToolUseID] != r.want {
-							t.Errorf("%s content = %v, want %s", r.block.ToolUseID, got[r.block.ToolUseID], r.want)
-						}
-					}
+					c := toolErrorClient(t, srv.URL, responses)
+					runChat(t, c, llm.ChatRequest{Messages: toolErrorMessages(role)}, stream)
+					checkToolResults(t, sentToolResults(t, captured, responses))
 				})
 			}
+		}
+	}
+}
+
+// toolErrorClient returns a client for url that uses the Responses API
+// when responses is set, and Chat Completions otherwise.
+func toolErrorClient(t *testing.T, url string, responses bool) llm.Client {
+	t.Helper()
+	opts := llm.Options{
+		APIKey:  "test-key",
+		Model:   "gpt-4o",
+		BaseURL: url,
+		Retry:   llm.RetryConfig{Disabled: true},
+	}
+	if responses {
+		opts.Extensions = forceResponses
+	}
+	c, err := New(opts)
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	return c
+}
+
+// runChat sends req with Chat, or with ChatStream when stream is set,
+// draining the stream, and fails the test on any error.
+func runChat(t *testing.T, c llm.Client, req llm.ChatRequest, stream bool) {
+	t.Helper()
+	if !stream {
+		if _, err := c.Chat(context.Background(), req); err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		return
+	}
+	s, err := c.ChatStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for range s.Chunks {
+	}
+	if err := <-s.Err; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+}
+
+// checkToolResults compares the tool results sent, keyed by call ID,
+// with toolErrorResults.
+func checkToolResults(t *testing.T, got map[string]any) {
+	t.Helper()
+	if len(got) != len(toolErrorResults) {
+		t.Fatalf("sent %d tool results, want %d: %v", len(got), len(toolErrorResults), got)
+	}
+	for _, r := range toolErrorResults {
+		if got[r.block.ToolUseID] != r.want {
+			t.Errorf("%s content = %v, want %s", r.block.ToolUseID, got[r.block.ToolUseID], r.want)
 		}
 	}
 }
