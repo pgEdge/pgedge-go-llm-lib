@@ -306,7 +306,7 @@ func TestAdapt_ForcedChatCompletionsNotRerouted(t *testing.T) {
 		c := newAdaptClient(t, srv.URL, nil, Extension{ResponsesAPI: llm.Bool(false)})
 
 		_, err := call(t, c, stream, llm.ChatRequest{})
-		if !errors.Is(err, llm.ErrProviderError) || !strings.Contains(err.Error(), "v1/responses") {
+		if !errors.Is(err, llm.ErrNotFound) || !strings.Contains(err.Error(), "v1/responses") {
 			t.Errorf("want the provider's 404 error, got %v", err)
 		}
 		if got := requests(); len(got) != 1 {

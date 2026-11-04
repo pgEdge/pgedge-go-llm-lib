@@ -485,7 +485,8 @@ if err != nil {
 ```
 
 Sentinel errors: `ErrNotSupported`, `ErrAuthentication`, `ErrRateLimit`,
-`ErrInvalidRequest`, `ErrProviderError`. All are wrapped in `*ProviderError`.
+`ErrInvalidRequest`, `ErrNotFound`, `ErrProviderError`. All are wrapped in
+`*ProviderError`.
 
 The `OnRetry` hook on `Options` receives a `RetryEvent` before each sleep,
 with `Attempt`, `StatusCode`, `Err`, and `Wait` fields — useful for

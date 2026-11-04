@@ -8,6 +8,14 @@ The format is based on
 project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `ErrNotFound`, a sentinel for an HTTP 404 from the upstream API, which every provider now returns in place of `ErrProviderError`. A 404 almost always means configuration rather than a fault: a model that does not exist, has been retired or is not available to the key, a model that Ollama has not pulled, or a base URL with the wrong path. Until now it was indistinguishable from a provider outage, so a caller had no way to tell an operator to fix their settings rather than retry
+
+### Changed
+- **Behaviour change:** callers matching on `ErrProviderError` for a 404 should match on `ErrNotFound` instead. `ProviderError.StatusCode` is unchanged
+
 ## [0.6.0] - 2026-10-27
 
 ### Added

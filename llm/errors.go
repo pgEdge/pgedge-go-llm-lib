@@ -30,6 +30,11 @@ var (
 	// ErrInvalidRequest indicates a 400 from the upstream API or a
 	// malformed library-level request.
 	ErrInvalidRequest = errors.New("invalid request")
+	// ErrNotFound indicates a 404 from the upstream API: usually a
+	// model that does not exist, has been retired, or is not
+	// available to the configured key, though a base URL with the
+	// wrong path produces it too.
+	ErrNotFound = errors.New("not found")
 	// ErrProviderError is the catch-all for upstream errors that do
 	// not match a more specific sentinel.
 	ErrProviderError = errors.New("provider error")
