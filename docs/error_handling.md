@@ -6,7 +6,7 @@ provider-specific details.
 
 ## Sentinel Errors
 
-The library defines five sentinel errors that categorize
+The library defines six sentinel errors that categorize
 common failure modes. The following table describes each
 sentinel error:
 
@@ -16,6 +16,7 @@ sentinel error:
 | ErrAuthentication | Authentication failed (401 or 403).  |
 | ErrRateLimit      | Rate limit exceeded (429).           |
 | ErrInvalidRequest | The request is invalid (400).        |
+| ErrNotFound       | The model or endpoint was not found (404). |
 | ErrProviderError  | A general provider error occurred.   |
 
 ## Checking Error Types
@@ -33,6 +34,8 @@ if err != nil {
         log.Println("Too many requests; retry later")
     case errors.Is(err, llm.ErrInvalidRequest):
         log.Println("Invalid request parameters")
+    case errors.Is(err, llm.ErrNotFound):
+        log.Println("Check the model name and base URL")
     case errors.Is(err, llm.ErrNotSupported):
         log.Println("Operation not supported")
     default:
@@ -133,12 +136,19 @@ codes to sentinel errors using the following rules:
 | 400         | ErrInvalidRequest |
 | 401         | ErrAuthentication |
 | 403         | ErrAuthentication |
+| 404         | ErrNotFound       |
 | 429         | ErrRateLimit      |
 | Other       | ErrProviderError  |
 
-The Ollama provider maps all errors to `ErrProviderError`
-because Ollama runs locally and does not use HTTP
-authentication or rate limiting.
+A 404 usually means the model does not exist, has been
+retired, or is not available to the configured key; a base
+URL with the wrong path produces one too.
+
+The Ollama provider maps a 404, which Ollama returns for a
+model that has not been pulled, to `ErrNotFound`, and every
+other error to `ErrProviderError`, because Ollama runs
+locally and does not use HTTP authentication or rate
+limiting.
 
 ## Streaming Errors
 

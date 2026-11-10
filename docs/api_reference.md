@@ -738,6 +738,7 @@ type StreamChunk struct {
 | `ErrAuthentication` | `"authentication failed"` |
 | `ErrRateLimit`      | `"rate limit exceeded"` |
 | `ErrInvalidRequest` | `"invalid request"` |
+| `ErrNotFound`       | `"not found"` |
 | `ErrProviderError`  | `"provider error"` |
 
 ---

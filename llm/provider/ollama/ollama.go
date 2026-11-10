@@ -989,9 +989,15 @@ func mapError(status int, body []byte) error {
 		msg = fmt.Sprintf("HTTP %d", status)
 	}
 
-	// Ollama is local, so all errors map to ErrProviderError.
+	// Ollama is local, so it has no authentication or rate limiting
+	// to report, and every error maps to ErrProviderError except a
+	// 404, which Ollama returns for a model that has not been pulled.
+	sentinel := llm.ErrProviderError
+	if status == 404 {
+		sentinel = llm.ErrNotFound
+	}
 	return &llm.ProviderError{
-		Err:        llm.ErrProviderError,
+		Err:        sentinel,
 		StatusCode: status,
 		Message:    msg,
 		Provider:   providerName,

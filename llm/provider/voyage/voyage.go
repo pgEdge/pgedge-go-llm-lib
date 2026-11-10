@@ -501,6 +501,8 @@ func statusToErr(status int) error {
 		return llm.ErrRateLimit
 	case status == http.StatusBadRequest:
 		return llm.ErrInvalidRequest
+	case status == http.StatusNotFound:
+		return llm.ErrNotFound
 	default:
 		return llm.ErrProviderError
 	}

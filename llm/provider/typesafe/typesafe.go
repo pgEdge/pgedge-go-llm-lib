@@ -303,6 +303,8 @@ func statusToErr(status int) error {
 		return llm.ErrRateLimit
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return llm.ErrInvalidRequest
+	case http.StatusNotFound:
+		return llm.ErrNotFound
 	default:
 		return llm.ErrProviderError
 	}

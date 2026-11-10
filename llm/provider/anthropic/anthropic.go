@@ -963,6 +963,8 @@ func (c *client) mapError(status int, body []byte) error {
 		sentinel = llm.ErrRateLimit
 	case status == 400:
 		sentinel = llm.ErrInvalidRequest
+	case status == 404:
+		sentinel = llm.ErrNotFound
 	default:
 		sentinel = llm.ErrProviderError
 	}
