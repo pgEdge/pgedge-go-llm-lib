@@ -10,6 +10,10 @@ project adheres to
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-10
+
+This is the first stable release: the library is now a supported pgEdge product, and its public API follows Semantic Versioning from here on, so a breaking change will come only with a new major version. It includes the credential-redaction fix first released in 0.2.0 for advisory [GHSA-8835-xmqj-354h](https://github.com/pgEdge/pgedge-go-llm-lib/security/advisories/GHSA-8835-xmqj-354h), where provider error messages could relay a fragment of the configured API key to callers; anyone still on a release older than 0.2.0 should upgrade.
+
 ### Added
 - `ErrNotFound`, a sentinel for an HTTP 404 from the upstream API, which every provider now returns in place of `ErrProviderError`. A 404 almost always means configuration rather than a fault: a model that does not exist, has been retired or is not available to the key, a model that Ollama has not pulled, or a base URL with the wrong path. Until now it was indistinguishable from a provider outage, so a caller had no way to tell an operator to fix their settings rather than retry
 
